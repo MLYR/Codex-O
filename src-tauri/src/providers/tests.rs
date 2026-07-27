@@ -9,7 +9,8 @@ use std::os::unix::fs::symlink;
 use tempfile::TempDir;
 
 use super::{
-    DiscoveryWarningCode, ProviderDiagnosticCode, ProviderKind, ProviderRegistry, ProviderRoots,
+    AdditionalRoot, DiscoveryWarningCode, ProviderDiagnosticCode, ProviderKind, ProviderRegistry,
+    ProviderRoots,
 };
 
 #[test]
@@ -274,6 +275,107 @@ fn system_provider_is_explicitly_unavailable_until_a_stable_root_exists() {
         diagnostic.kind == ProviderKind::System
             && diagnostic.code == ProviderDiagnosticCode::Unavailable
     }));
+}
+
+#[test]
+fn skill_id_is_stable_and_separates_same_relative_paths_by_provider() {
+    let fixture = ProviderFixture::new();
+    fixture.write_skill(&fixture.user_root(), "same-name");
+    fixture.write_skill(&fixture.repo_root(), "same-name");
+
+    let first = fixture.registry().discover_all();
+    let second = fixture.registry().discover_all();
+
+    assert_eq!(first.skills[0].id, second.skills[0].id);
+    assert_ne!(first.skills[0].id, first.skills[1].id);
+    assert!(first.skills[0].id.contains("user_global"));
+    assert!(first.skills[1].id.contains("repo"));
+}
+
+#[test]
+fn discovery_dto_does_not_serialize_the_internal_skill_directory() {
+    let fixture = ProviderFixture::new();
+    fixture.write_skill(&fixture.user_root(), "private-root");
+
+    let discovery = fixture.registry().discover_all();
+    let serialized = serde_json::to_string(&discovery.skills[0]).unwrap();
+
+    assert!(!serialized.contains(fixture.root().to_str().unwrap()));
+    assert!(serialized.contains("\"id\""));
+}
+
+#[test]
+fn additional_root_is_read_only_and_scanned_as_a_distinct_provider() {
+    let fixture = ProviderFixture::new();
+    let additional = fixture.root().join("additional");
+    fixture.write_skill(&additional, "shared");
+    let root = AdditionalRoot::new("team", additional).unwrap();
+    let roots = ProviderRoots::new(
+        fixture.home_directory.clone(),
+        fixture.repository_directory.clone(),
+        fixture.cache_directory.clone(),
+    )
+    .with_additional_roots(vec![root]);
+
+    let discovery = ProviderRegistry::with_roots(roots).discover_all();
+    let provider = discovery
+        .providers
+        .iter()
+        .find(|provider| provider.id == "additional_root:team")
+        .unwrap();
+
+    assert_eq!(provider.kind, ProviderKind::AdditionalRoot);
+    assert!(!provider.capabilities.can_import);
+    assert_eq!(discovery.skills[0].provider_id, "additional_root:team");
+}
+
+#[test]
+fn additional_root_rejects_empty_path_like_and_oversized_ids() {
+    let directory = PathBuf::from("fixture");
+
+    assert!(AdditionalRoot::new("", directory.clone()).is_none());
+    assert!(AdditionalRoot::new("../outside", directory.clone()).is_none());
+    assert!(AdditionalRoot::new("a".repeat(65), directory.clone()).is_none());
+    assert!(AdditionalRoot::new("team_01", directory).is_some());
+}
+
+#[test]
+fn unavailable_additional_root_does_not_block_other_provider_scans() {
+    let fixture = ProviderFixture::new();
+    fixture.write_skill(&fixture.user_root(), "available");
+    let root = AdditionalRoot::new("missing", fixture.root().join("missing")).unwrap();
+    let roots = ProviderRoots::new(
+        fixture.home_directory.clone(),
+        fixture.repository_directory.clone(),
+        fixture.cache_directory.clone(),
+    )
+    .with_additional_roots(vec![root]);
+
+    let discovery = ProviderRegistry::with_roots(roots).discover_all();
+
+    assert_eq!(discovery.skills.len(), 1);
+    assert!(discovery
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.provider_id == "additional_root:missing"));
+}
+
+#[test]
+fn stable_skill_id_keeps_provider_and_path_boundaries_unambiguous() {
+    let fixture = ProviderFixture::new();
+    fixture.write_skill(&fixture.user_root(), "x");
+    let root = AdditionalRoot::new("user_globalx", fixture.root().join("additional")).unwrap();
+    fixture.write_skill(&fixture.root().join("additional"), "x");
+    let roots = ProviderRoots::new(
+        fixture.home_directory.clone(),
+        fixture.repository_directory.clone(),
+        fixture.cache_directory.clone(),
+    )
+    .with_additional_roots(vec![root]);
+
+    let discovery = ProviderRegistry::with_roots(roots).discover_all();
+
+    assert_ne!(discovery.skills[0].id, discovery.skills[1].id);
 }
 
 struct ProviderFixture {

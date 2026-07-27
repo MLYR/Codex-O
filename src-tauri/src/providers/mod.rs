@@ -66,9 +66,18 @@ pub struct ProviderDescriptor {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DiscoveredSkill {
+    pub id: String,
     pub provider_id: String,
     pub provider_kind: ProviderKind,
     pub relative_path: String,
+    #[serde(skip_serializing)]
+    skill_directory: PathBuf,
+}
+
+impl DiscoveredSkill {
+    pub(crate) fn skill_directory(&self) -> &Path {
+        &self.skill_directory
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -97,6 +106,7 @@ pub enum ProviderDiagnosticCode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProviderDiagnostic {
+    pub provider_id: String,
     pub kind: ProviderKind,
     pub code: ProviderDiagnosticCode,
 }
@@ -141,6 +151,7 @@ pub struct ProviderRoots {
     pub home_directory: PathBuf,
     pub repository_directory: PathBuf,
     pub plugin_cache_directory: PathBuf,
+    pub additional_roots: Vec<AdditionalRoot>,
 }
 
 impl ProviderRoots {
@@ -153,7 +164,36 @@ impl ProviderRoots {
             home_directory,
             repository_directory,
             plugin_cache_directory,
+            additional_roots: Vec::new(),
         }
+    }
+
+    pub fn with_additional_roots(mut self, additional_roots: Vec<AdditionalRoot>) -> Self {
+        self.additional_roots = additional_roots;
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AdditionalRoot {
+    id: String,
+    directory: PathBuf,
+}
+
+impl AdditionalRoot {
+    pub fn new(id: impl Into<String>, directory: PathBuf) -> Option<Self> {
+        let id = id.into();
+
+        if id.is_empty()
+            || id.len() > 64
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return None;
+        }
+
+        Some(Self { id, directory })
     }
 }
 
@@ -162,10 +202,25 @@ pub struct ProviderRegistry {
     repo: DirectoryProvider,
     legacy_user: DirectoryProvider,
     plugin_cache: PluginCacheProvider,
+    additional_roots: Vec<DirectoryProvider>,
 }
 
 impl ProviderRegistry {
     pub fn with_roots(roots: ProviderRoots) -> Self {
+        let additional_roots = roots
+            .additional_roots
+            .into_iter()
+            .map(|root| {
+                DirectoryProvider::new(
+                    descriptor(
+                        &format!("additional_root:{}", root.id),
+                        ProviderKind::AdditionalRoot,
+                    ),
+                    root.directory,
+                )
+            })
+            .collect();
+
         Self {
             user_global: DirectoryProvider::new(
                 descriptor("user_global", ProviderKind::UserGlobal),
@@ -180,6 +235,7 @@ impl ProviderRegistry {
                 roots.home_directory.join(".codex/skills"),
             ),
             plugin_cache: PluginCacheProvider::new(roots.plugin_cache_directory),
+            additional_roots,
         }
     }
 
@@ -190,10 +246,14 @@ impl ProviderRegistry {
         discovery.extend(self.repo.discover());
         discovery.extend(self.legacy_user.discover());
         discovery.extend(self.plugin_cache.discover());
+        for additional_root in &self.additional_roots {
+            discovery.extend(additional_root.discover());
+        }
         discovery
             .providers
             .push(descriptor("system", ProviderKind::System));
         discovery.diagnostics.push(ProviderDiagnostic {
+            provider_id: "system".to_owned(),
             kind: ProviderKind::System,
             code: ProviderDiagnosticCode::Unavailable,
         });
@@ -221,6 +281,13 @@ impl SkillProvider for DirectoryProvider {
     fn discover(&self) -> ProviderDiscovery {
         let mut discovery = discover_skill_directories(&self.descriptor, &self.root);
         discovery.providers.push(self.descriptor());
+        if !is_regular_directory(&self.root) {
+            discovery.diagnostics.push(ProviderDiagnostic {
+                provider_id: self.descriptor.id.clone(),
+                kind: self.descriptor.kind,
+                code: ProviderDiagnosticCode::Unavailable,
+            });
+        }
         discovery
     }
 }
@@ -376,9 +443,11 @@ fn scan_skill_directories(
             }
             Ok(metadata) if metadata.is_file() => {
                 discovery.skills.push(DiscoveredSkill {
+                    id: skill_id(&descriptor.id, &relative),
                     provider_id: descriptor.id.clone(),
                     provider_kind: descriptor.kind,
                     relative_path: relative,
+                    skill_directory: entry_path,
                 });
             }
             Ok(_) => {
@@ -401,6 +470,10 @@ fn scan_skill_directories(
             }
         }
     }
+}
+
+fn skill_id(provider_id: &str, relative_path: &str) -> String {
+    format!("skill:{}:{provider_id}{relative_path}", provider_id.len())
 }
 
 fn child_directories(
