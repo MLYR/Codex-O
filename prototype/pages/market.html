@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<!-- 页面: Skill 市场 | 对应 PRD: P1-01 | 优先级: P1
+     覆盖: 39 个官方精选卡片(7 分类) / 搜索 + 分类筛选 / 已安装置灰
+           安装前 AI 预览弹窗(轻量版: 作用+场景) / 安装完成 Toast / 卡片变已安装 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skill 市场 · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<style>
+  .market-card { display: flex; flex-direction: column; gap: var(--space-2); height: 172px; }
+  .market-card .skill-foot { border-top: none; padding-top: 0; margin-top: auto; }
+  .market-card.is-installed .skill-icon { background: var(--color-chip-neutral); color: var(--color-text-tertiary); }
+  .cat-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+</style>
+<script>
+  window.PROTO = {
+    name: 'Skill 市场 · P1-01',
+    states: ['normal', 'loading', 'empty', 'error'],
+    aiStates: true,
+    actions: []
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item active" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>Skill 市场</h1>
+      <span class="sub">官方精选 39 个 · 已安装 9 个</span>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，Skill 解析展示英文原文</span>
+        <span class="ai-text-down">AI 服务不可用，Skill 解析已回退为英文原文</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+
+      <!-- ========== 视图: 正常 ========== -->
+      <section data-view="normal">
+        <div class="row-flex gap8" style="flex-wrap: wrap;">
+          <div class="search-box">
+            <i data-icon="search" data-size="14"></i>
+            <input class="input" id="q" type="text" placeholder="搜索市场 Skill…" data-hotkey-search>
+            <span class="kbd">⌘K</span>
+          </div>
+          <div class="segmented" data-segmented id="catSeg">
+            <button class="active" data-seg="all">全部 39</button>
+            <button data-seg="design">设计 6</button>
+            <button data-seg="dev">开发 8</button>
+            <button data-seg="docs">文档 6</button>
+            <button data-seg="office">办公 6</button>
+            <button data-seg="data">数据 5</button>
+            <button data-seg="efficiency">效率 5</button>
+            <button data-seg="test">测试 3</button>
+          </div>
+          <span class="s12 t3 ml-auto" id="visibleCount">39 个</span>
+        </div>
+
+        <div class="skill-grid mt16" id="marketGrid" style="grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
+
+          <!-- ===== 设计 6 ===== -->
+          <div class="card market-card is-installed" data-cat="design" data-name="ui-ux-pro-max" data-goal="以专家视角审查并重构界面可用性与视觉层级">
+            <div class="skill-card-head"><span class="skill-icon">U</span><div class="skill-title-block"><div class="skill-name">ui-ux-pro-max</div><div class="skill-ver">设计</div></div></div>
+            <p class="skill-desc clamp2">Senior UI/UX expert persona: audits usability, visual hierarchy and accessibility of your interfaces.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card is-installed" data-cat="design" data-name="impeccable" data-goal="逐条排查 AI 生成页面的设计债">
+            <div class="skill-card-head"><span class="skill-icon">I</span><div class="skill-title-block"><div class="skill-name">impeccable</div><div class="skill-ver">设计</div></div></div>
+            <p class="skill-desc clamp2">Anti-slop audit checklist for AI-generated pages: catches gradient abuse, emoji icons and layout debt.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="design" data-name="design-tokens-gen" data-goal="从现有 CSS 提取设计令牌并生成文档">
+            <div class="skill-card-head"><span class="skill-icon">D</span><div class="skill-title-block"><div class="skill-name">design-tokens-gen</div><div class="skill-ver">设计</div></div></div>
+            <p class="skill-desc clamp2">Extract colors, spacing and typography from existing CSS into a documented design-token file.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="design" data-name="figma-to-code" data-goal="将 Figma 画稿还原为语义化 HTML/CSS">
+            <div class="skill-card-head"><span class="skill-icon">F</span><div class="skill-title-block"><div class="skill-name">figma-to-code</div><div class="skill-ver">设计</div></div></div>
+            <p class="skill-desc clamp2">Turn Figma frame exports into semantic HTML/CSS with token-aware class naming and clean structure.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="design" data-name="brand-identity-kit" data-goal="起草品牌视觉与文案规范手册">
+            <div class="skill-card-head"><span class="skill-icon">B</span><div class="skill-title-block"><div class="skill-name">brand-identity-kit</div><div class="skill-ver">设计</div></div></div>
+            <p class="skill-desc clamp2">Draft logo usage rules, palette scales and voice guidelines into a consistent brand mini-book.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="design" data-name="motion-spec" data-goal="用时长/缓动表规范界面动效">
+            <div class="skill-card-head"><span class="skill-icon">M</span><div class="skill-title-block"><div class="skill-name">motion-spec</div><div class="skill-ver">设计</div></div></div>
+            <p class="skill-desc clamp2">Specify UI motion as duration/easing tables and generate CSS transition tokens from them.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+
+          <!-- ===== 开发 8 ===== -->
+          <div class="card market-card is-installed" data-cat="dev" data-name="frontend-design" data-goal="生成高质量前端界面代码">
+            <div class="skill-card-head"><span class="skill-icon">F</span><div class="skill-title-block"><div class="skill-name">frontend-design</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">Generate high-quality frontend interface code balancing design aesthetics and engineering quality.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card is-installed" data-cat="dev" data-name="tdesign-react" data-goal="TDesign 组件选型与属性配置">
+            <div class="skill-card-head"><span class="skill-icon">T</span><div class="skill-title-block"><div class="skill-name">tdesign-react</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">TDesign React expert: component selection, prop configuration and accessibility checks.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="dev" data-name="nextjs-app-router" data-goal="脚手架 App Router 页面与路由处理器">
+            <div class="skill-card-head"><span class="skill-icon">N</span><div class="skill-title-block"><div class="skill-name">nextjs-app-router</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">Scaffold App Router pages, layouts and route handlers with caching and streaming best practices.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="dev" data-name="tailwind-patterns" data-goal="组合生产级 Tailwind 布局">
+            <div class="skill-card-head"><span class="skill-icon">T</span><div class="skill-title-block"><div class="skill-name">tailwind-patterns</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">Compose production-grade Tailwind layouts: dashboards, marketing pages, forms and data displays.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="dev" data-name="vue3-composition" data-goal="Vue 3 组合式 API 最佳实践">
+            <div class="skill-card-head"><span class="skill-icon">V</span><div class="skill-title-block"><div class="skill-name">vue3-composition</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">Vue 3 Composition API patterns: composables, provide/inject, Pinia stores and script-setup SFCs.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="dev" data-name="node-api-starter" data-goal="设计规范的 Node REST API">
+            <div class="skill-card-head"><span class="skill-icon">N</span><div class="skill-title-block"><div class="skill-name">node-api-starter</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">Design REST APIs with Express/Hono: routing, validation, unified error format and OpenAPI output.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="dev" data-name="tauri-desktop" data-goal="构建 Tauri 2 桌面应用">
+            <div class="skill-card-head"><span class="skill-icon">T</span><div class="skill-title-block"><div class="skill-name">tauri-desktop</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">Build Tauri 2 desktop apps: window config, commands, auto-updater and code signing pipeline.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="dev" data-name="chrome-extension" data-goal="MV3 扩展脚手架与权限治理">
+            <div class="skill-card-head"><span class="skill-icon">C</span><div class="skill-title-block"><div class="skill-name">chrome-extension</div><div class="skill-ver">开发</div></div></div>
+            <p class="skill-desc clamp2">MV3 extension scaffolding: content scripts, service worker messaging and permission hygiene.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+
+          <!-- ===== 文档 6 ===== -->
+          <div class="card market-card is-installed" data-cat="docs" data-name="docx" data-goal="生成与编辑 Word 文档">
+            <div class="skill-card-head"><span class="skill-icon">D</span><div class="skill-title-block"><div class="skill-name">docx</div><div class="skill-ver">文档</div></div></div>
+            <p class="skill-desc clamp2">Generate and edit Word documents with style templates and automatic TOC.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="docs" data-name="markdown-publisher" data-goal="把 Markdown 打磨成可发布文档">
+            <div class="skill-card-head"><span class="skill-icon">M</span><div class="skill-title-block"><div class="skill-name">markdown-publisher</div><div class="skill-ver">文档</div></div></div>
+            <p class="skill-desc clamp2">Polish Markdown into publish-ready docs: heading hierarchy, callouts, link checks and formatting.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="docs" data-name="readme-architect" data-goal="写出能带新人上手的 README">
+            <div class="skill-card-head"><span class="skill-icon">R</span><div class="skill-title-block"><div class="skill-name">readme-architect</div><div class="skill-ver">文档</div></div></div>
+            <p class="skill-desc clamp2">Write READMEs that onboard: badges, quickstart, architecture map, screenshots and FAQ.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="docs" data-name="changelog-gen" data-goal="从提交记录生成版本日志">
+            <div class="skill-card-head"><span class="skill-icon">C</span><div class="skill-title-block"><div class="skill-name">changelog-gen</div><div class="skill-ver">文档</div></div></div>
+            <p class="skill-desc clamp2">Generate Keep-a-Changelog release notes from conventional commits and PR labels.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="docs" data-name="adr-writer" data-goal="用 ADR 记录架构决策">
+            <div class="skill-card-head"><span class="skill-icon">A</span><div class="skill-title-block"><div class="skill-name">adr-writer</div><div class="skill-ver">文档</div></div></div>
+            <p class="skill-desc clamp2">Capture architecture decisions as numbered ADR records with context, options and consequences.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="docs" data-name="mermaid-diagrams" data-goal="用 Mermaid 绘制流程/时序图">
+            <div class="skill-card-head"><span class="skill-icon">M</span><div class="skill-title-block"><div class="skill-name">mermaid-diagrams</div><div class="skill-ver">文档</div></div></div>
+            <p class="skill-desc clamp2">Draw flowcharts, sequence and ER diagrams in Mermaid with clean layout and naming.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+
+          <!-- ===== 办公 6 ===== -->
+          <div class="card market-card is-installed" data-cat="office" data-name="pdfkit-py" data-goal="用 Python 生成与处理 PDF">
+            <div class="skill-card-head"><span class="skill-icon">P</span><div class="skill-title-block"><div class="skill-name">pdfkit-py</div><div class="skill-ver">办公</div></div></div>
+            <p class="skill-desc clamp2">Generate and manipulate PDFs with Python: layout, watermarks, merge and split.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card is-installed" data-cat="office" data-name="xlsx" data-goal="读写 Excel 工作簿">
+            <div class="skill-card-head"><span class="skill-icon">X</span><div class="skill-title-block"><div class="skill-name">xlsx</div><div class="skill-ver">办公</div></div></div>
+            <p class="skill-desc clamp2">Read and write Excel workbooks with formulas, styling and multi-sheet batch processing.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card is-installed" data-cat="office" data-name="pptx" data-goal="创建与修改 PPTX 演示文稿">
+            <div class="skill-card-head"><span class="skill-icon">P</span><div class="skill-title-block"><div class="skill-name">pptx</div><div class="skill-ver">办公</div></div></div>
+            <p class="skill-desc clamp2">Create and edit PPTX decks: masters, layouts and bulk chart generation.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="office" data-name="csv-toolkit" data-goal="清洗与重塑 CSV 数据">
+            <div class="skill-card-head"><span class="skill-icon">C</span><div class="skill-title-block"><div class="skill-name">csv-toolkit</div><div class="skill-ver">办公</div></div></div>
+            <p class="skill-desc clamp2">Clean, join and reshape CSV files; detect encoding and delimiter issues automatically.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="office" data-name="pdf-extract" data-goal="从 PDF 提取表格与文本">
+            <div class="skill-card-head"><span class="skill-icon">P</span><div class="skill-title-block"><div class="skill-name">pdf-extract</div><div class="skill-ver">办公</div></div></div>
+            <p class="skill-desc clamp2">Extract tables, text and metadata from PDFs into structured JSON or Markdown.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="office" data-name="email-composer" data-goal="起草中英双语商务邮件">
+            <div class="skill-card-head"><span class="skill-icon">E</span><div class="skill-title-block"><div class="skill-name">email-composer</div><div class="skill-ver">办公</div></div></div>
+            <p class="skill-desc clamp2">Draft bilingual business emails with tone control, follow-up templates and subject lines.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+
+          <!-- ===== 数据 5 ===== -->
+          <div class="card market-card" data-cat="data" data-name="sql-query-assistant" data-goal="自然语言生成与优化 SQL">
+            <div class="skill-card-head"><span class="skill-icon">S</span><div class="skill-title-block"><div class="skill-name">sql-query-assistant</div><div class="skill-ver">数据</div></div></div>
+            <p class="skill-desc clamp2">Generate and optimize SQL from natural language with execution-plan explanations.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="data" data-name="sqlite-explorer" data-goal="检查 SQLite 库结构与数据">
+            <div class="skill-card-head"><span class="skill-icon">S</span><div class="skill-title-block"><div class="skill-name">sqlite-explorer</div><div class="skill-ver">数据</div></div></div>
+            <p class="skill-desc clamp2">Inspect SQLite databases: schema, indexes, row counts and safe ad-hoc queries.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="data" data-name="data-cleaner" data-goal="为脏数据生成可复现清洗流水线">
+            <div class="skill-card-head"><span class="skill-icon">D</span><div class="skill-title-block"><div class="skill-name">data-cleaner</div><div class="skill-ver">数据</div></div></div>
+            <p class="skill-desc clamp2">Profile messy datasets and generate repeatable cleaning pipelines with validation rules.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="data" data-name="chart-builder" data-goal="把表格变成得体的图表">
+            <div class="skill-card-head"><span class="skill-icon">C</span><div class="skill-title-block"><div class="skill-name">chart-builder</div><div class="skill-ver">数据</div></div></div>
+            <p class="skill-desc clamp2">Turn tables into SVG/Canvas charts with sensible defaults, labels and annotations.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="data" data-name="json-schema-gen" data-goal="从样例推断 JSON Schema">
+            <div class="skill-card-head"><span class="skill-icon">J</span><div class="skill-title-block"><div class="skill-name">json-schema-gen</div><div class="skill-ver">数据</div></div></div>
+            <p class="skill-desc clamp2">Infer JSON Schema from samples and validate payloads with human-readable errors.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+
+          <!-- ===== 效率 5 ===== -->
+          <div class="card market-card is-installed" data-cat="efficiency" data-name="tencentmap-map-assistant" data-goal="腾讯地图检索与路径规划接入">
+            <div class="skill-card-head"><span class="skill-icon">T</span><div class="skill-title-block"><div class="skill-name">tencentmap-map-assistant</div><div class="skill-ver">效率</div></div></div>
+            <p class="skill-desc clamp2">Tencent Maps integration assistant: place search, routing and map components.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm ml-auto" disabled>已安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="efficiency" data-name="web-scraper" data-goal="礼貌地抓取与解析网页">
+            <div class="skill-card-head"><span class="skill-icon">W</span><div class="skill-title-block"><div class="skill-name">web-scraper</div><div class="skill-ver">效率</div></div></div>
+            <p class="skill-desc clamp2">Fetch and parse web pages politely: selectors, pagination and robots.txt respect.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="efficiency" data-name="cron-assistant" data-goal="编写与审计 crontab 表达式">
+            <div class="skill-card-head"><span class="skill-icon">C</span><div class="skill-title-block"><div class="skill-name">cron-assistant</div><div class="skill-ver">效率</div></div></div>
+            <p class="skill-desc clamp2">Write and explain crontab expressions; audit overlapping schedules and timezone pitfalls.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="efficiency" data-name="translator-zh-en" data-goal="高保真中英互译">
+            <div class="skill-card-head"><span class="skill-icon">T</span><div class="skill-title-block"><div class="skill-name">translator-zh-en</div><div class="skill-ver">效率</div></div></div>
+            <p class="skill-desc clamp2">High-fidelity zh⇄en translation for docs and UI copy with project glossary support.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="efficiency" data-name="clipboard-history" data-goal="搜索与复用剪贴板片段">
+            <div class="skill-card-head"><span class="skill-icon">C</span><div class="skill-title-block"><div class="skill-name">clipboard-history</div><div class="skill-ver">效率</div></div></div>
+            <p class="skill-desc clamp2">Search and reuse clipboard snippets; pin frequently used text blocks and commands.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+
+          <!-- ===== 测试 3 ===== -->
+          <div class="card market-card" data-cat="test" data-name="jest-setup" data-goal="从零配置 Jest/Vitest 测试">
+            <div class="skill-card-head"><span class="skill-icon">J</span><div class="skill-title-block"><div class="skill-name">jest-setup</div><div class="skill-ver">测试</div></div></div>
+            <p class="skill-desc clamp2">Configure Jest/Vitest from scratch: transforms, coverage thresholds and CI integration.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="test" data-name="api-mocker" data-goal="按 OpenAPI 生成 Mock 服务">
+            <div class="skill-card-head"><span class="skill-icon">A</span><div class="skill-title-block"><div class="skill-name">api-mocker</div><div class="skill-ver">测试</div></div></div>
+            <p class="skill-desc clamp2">Generate mock servers from OpenAPI specs with realistic fixtures and latency controls.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+          <div class="card market-card" data-cat="test" data-name="lighthouse-audit" data-goal="性能审计并输出修复清单">
+            <div class="skill-card-head"><span class="skill-icon">L</span><div class="skill-title-block"><div class="skill-name">lighthouse-audit</div><div class="skill-ver">测试</div></div></div>
+            <p class="skill-desc clamp2">Run Lighthouse-style audits and turn findings into a prioritized, actionable fix list.</p>
+            <div class="skill-foot"><span class="s11 t3">官方精选</span><button class="btn btn-sm btn-primary ml-auto" data-open-modal="modal-install">安装</button></div>
+          </div>
+
+        </div>
+
+        <!-- 搜索/分类无结果 -->
+        <div class="empty" id="noResult" hidden style="padding: var(--space-10) var(--space-6);">
+          <div class="empty-icon" style="width: 64px; height: 64px;"><i data-icon="search" data-size="28"></i></div>
+          <div class="empty-title">市场中没有匹配的 Skill</div>
+          <p class="empty-desc">换个关键词试试，或通过 GitHub 拉取 / 本地导入安装。</p>
+          <div class="row-flex gap8">
+            <button class="btn btn-secondary" id="btnClearFilter">清除筛选</button>
+            <a class="btn btn-ghost" href="install.html">去安装页 →</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 骨架屏 ========== -->
+      <section data-view="loading" hidden>
+        <div class="row-flex gap8" style="margin-bottom: var(--space-4);">
+          <div class="sk" style="width: 280px; height: 32px; border-radius: var(--radius-sm);"></div>
+          <div class="sk" style="width: 420px; height: 28px; border-radius: var(--radius-sm);"></div>
+        </div>
+        <div class="skill-grid">
+          <div class="sk" style="height: 172px; border-radius: var(--radius-md);"></div><div class="sk" style="height: 172px; border-radius: var(--radius-md);"></div><div class="sk" style="height: 172px; border-radius: var(--radius-md);"></div>
+          <div class="sk" style="height: 172px; border-radius: var(--radius-md);"></div><div class="sk" style="height: 172px; border-radius: var(--radius-md);"></div><div class="sk" style="height: 172px; border-radius: var(--radius-md);"></div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 空数据 ========== -->
+      <section data-view="empty" hidden>
+        <div class="empty">
+          <div class="empty-icon"><i data-icon="store" data-size="40"></i></div>
+          <div class="empty-title">市场索引为空</div>
+          <p class="empty-desc">本地缓存的市场索引尚未建立。点击「同步索引」从官方源拉取最新的 39 个精选 Skill。</p>
+          <div class="row-flex gap8">
+            <button class="btn btn-primary" id="btnSyncIndex"><i data-icon="refresh" data-size="14"></i>同步索引</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 错误 ========== -->
+      <section data-view="error" hidden>
+        <div class="empty is-error">
+          <div class="empty-icon"><i data-icon="alert" data-size="40"></i></div>
+          <div class="empty-title">市场索引加载失败</div>
+          <p class="empty-desc">无法连接市场源。检查网络后重试，或先通过 GitHub / 本地方式安装。</p>
+          <div class="path-block">GET https://skills.codex-o.dev/index.json · ERR_NETWORK</div>
+          <div class="row-flex gap8">
+            <button class="btn btn-primary" id="btnRetryMarket"><i data-icon="refresh" data-size="14"></i>重试</button>
+            <a class="btn btn-ghost" href="install.html">去安装页 →</a>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ===== 安装前 AI 预览弹窗（轻量版：作用 + 场景） ===== -->
+<div class="modal-overlay" id="modal-install">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-title">安装 <span class="mono" id="miName">—</span>？</div>
+    <div class="modal-body">
+      <p class="s12 t3" id="miDesc" style="line-height: var(--line-height-body);">—</p>
+      <div class="ai-block mt12">
+        <div class="ai-block-head" style="margin-bottom: var(--space-2);">
+          <span class="ai-label"><i data-icon="sparkles" data-size="14"></i>AI 预览（轻量版）</span>
+          <span class="ai-model">安装后生成完整解析</span>
+        </div>
+        <div class="ai-part">
+          <div class="ai-key">作用</div>
+          <p class="ai-body" id="miGoal">—</p>
+        </div>
+        <div class="ai-part">
+          <div class="ai-key">使用场景</div>
+          <ul class="ai-scenes" id="miScenes"></ul>
+        </div>
+      </div>
+      <p class="s11 t3 mt12">将安装到 <span class="mono">~/.codex/skills/</span>，安装完成自动进行 AI 中文解析。</p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" data-close-modal data-autofocus>取消</button>
+      <button class="btn btn-primary" id="miConfirm"><i data-icon="download" data-size="14"></i>确认安装</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== 市场页交互 ===== */
+(function () {
+  var grid = document.getElementById('marketGrid');
+  var cards = Array.prototype.slice.call(grid.querySelectorAll('.market-card'));
+  var q = document.getElementById('q');
+  var noResult = document.getElementById('noResult');
+  var visibleCount = document.getElementById('visibleCount');
+  var currentCat = 'all';
+
+  /* 分类 → 使用场景模板 */
+  var SCENES = {
+    design: ['当用户要求创建或改版界面时', '当用户需要设计质量审查时', '当设计稿需要落地为代码时'],
+    dev: ['当用户搭建新功能或项目骨架时', '当用户需要框架最佳实践指导时', '当用户要求重构现有代码时'],
+    docs: ['当用户需要撰写或整理文档时', '当项目需要标准化文档结构时', '当发布前需要校对与补全时'],
+    office: ['当用户需要处理办公文档时', '当用户要求批量生成文件时', '当文档格式需要互转时'],
+    data: ['当用户提供数据文件要求分析时', '当查询或清洗遇到问题时', '当结果需要可视化呈现时'],
+    efficiency: ['当用户重复执行同类操作时', '当需要自动化日常工作流时', '当信息需要快速检索复用时'],
+    test: ['当用户需要为代码补测试时', '当 CI 中测试不稳定时', '当提交前需要质量门禁时']
+  };
+
+  function apply() {
+    var kw = q.value.trim().toLowerCase();
+    var visible = 0;
+    cards.forEach(function (c) {
+      var hay = (c.getAttribute('data-name') + ' ' + c.querySelector('.skill-desc').textContent + ' ' + (c.getAttribute('data-goal') || '')).toLowerCase();
+      var ok = (!kw || hay.indexOf(kw) > -1) && (currentCat === 'all' || c.getAttribute('data-cat') === currentCat);
+      c.hidden = !ok;
+      if (ok) visible++;
+    });
+    noResult.hidden = visible !== 0;
+    grid.style.display = visible === 0 ? 'none' : '';
+    visibleCount.textContent = visible + ' 个';
+  }
+  q.addEventListener('input', apply);
+  document.addEventListener('segment:change', function (e) {
+    currentCat = e.detail.value;
+    apply();
+  });
+  document.getElementById('btnClearFilter').addEventListener('click', function () {
+    q.value = ''; currentCat = 'all';
+    document.querySelectorAll('#catSeg button').forEach(function (b, i) { b.classList.toggle('active', i === 0); });
+    apply();
+  });
+
+  /* 安装预览弹窗：打开前填充卡片数据 */
+  var activeCard = null;
+  window.PROTO_HOOKS = {
+    beforeOpen: function (id, opener) {
+      if (id !== 'modal-install' || !opener) return;
+      activeCard = opener.closest('.market-card');
+      var name = activeCard.getAttribute('data-name');
+      document.getElementById('miName').textContent = name;
+      document.getElementById('miDesc').textContent = activeCard.querySelector('.skill-desc').textContent;
+      document.getElementById('miGoal').textContent = activeCard.getAttribute('data-goal');
+      var ul = document.getElementById('miScenes');
+      ul.innerHTML = '';
+      SCENES[activeCard.getAttribute('data-cat')].forEach(function (s) {
+        var li = document.createElement('li');
+        li.textContent = s;
+        ul.appendChild(li);
+      });
+    }
+  };
+
+  /* 确认安装 → Toast + 卡片置灰 */
+  document.getElementById('miConfirm').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>安装中…';
+    setTimeout(function () {
+      window.ProtoCloseModal('modal-install');
+      btn.disabled = false;
+      btn.innerHTML = '';
+      var i = document.createElement('i');
+      i.setAttribute('data-icon', 'download'); i.setAttribute('data-size', '14');
+      btn.appendChild(i); btn.appendChild(document.createTextNode('确认安装'));
+      window.ProtoIcons(btn);
+      if (activeCard) {
+        activeCard.classList.add('is-installed');
+        var b = activeCard.querySelector('.skill-foot .btn');
+        b.outerHTML = '<button class="btn btn-sm ml-auto" disabled>已安装</button>';
+      }
+      window.showToast({ type: 'success', title: '已安装，AI 解析完成', desc: activeCard ? activeCard.getAttribute('data-name') + ' 已可在会话中使用' : '' });
+    }, 1400);
+  });
+})();
+</script>
+</body>
+</html>

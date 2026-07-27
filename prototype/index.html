@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<!-- 页面: 原型评审入口（非产品页面） | 对应 PRD: 全局 | 优先级: — -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Codex-O 原型评审入口</title>
+<link rel="stylesheet" href="assets/tokens.css">
+<link rel="stylesheet" href="assets/app.css">
+<style>
+  /* 评审入口页专用（非产品 UI）：正常文档流滚动 */
+  body { overflow: auto; }
+  .review-wrap { max-width: 1180px; margin: 0 auto; padding: var(--space-10) var(--space-8) var(--space-12); }
+  .review-hero { border-bottom: 1px solid var(--color-border); padding-bottom: var(--space-6); }
+  .review-hero h1 { font-size: var(--font-size-display); font-weight: var(--font-weight-semibold); display: flex; align-items: center; gap: var(--space-3); }
+  .review-meta { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin-top: var(--space-3); font-size: var(--font-size-small); color: var(--color-text-secondary); }
+  .review-meta b { font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+  .legend { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-top: var(--space-4); font-size: var(--font-size-micro); color: var(--color-text-tertiary); align-items: center; }
+  .page-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-5); }
+  .page-card { display: block; color: inherit; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); overflow: hidden; transition: border-color var(--motion-fast) var(--motion-ease-out), box-shadow var(--motion-fast) var(--motion-ease-out); }
+  .page-card:hover { border-color: var(--color-primary-border); box-shadow: var(--shadow-md); }
+  .page-shot { position: relative; aspect-ratio: 1.6; overflow: hidden; background: var(--color-bg-sidebar); border-bottom: 1px solid var(--color-divider); }
+  .page-shot iframe { position: absolute; top: 0; left: 0; width: 1280px; height: 800px; border: none; pointer-events: none; transform-origin: top left; background: var(--color-bg); }
+  .page-info { padding: var(--space-3) var(--space-4) var(--space-4); }
+  .page-name { font-size: var(--font-size-h2); font-weight: var(--font-weight-semibold); display: flex; align-items: center; gap: var(--space-2); }
+  .page-prd { font-family: var(--font-mono); font-size: var(--font-size-micro); color: var(--color-text-tertiary); margin-top: 2px; }
+  .page-covers { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-top: var(--space-2); }
+  .cover-chip { font-size: 10px; padding: 1px 6px; border-radius: var(--radius-full); background: var(--color-chip-neutral); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .cover-chip.modal { background: var(--color-primary-subtle); color: var(--color-primary-text); border-color: var(--color-primary-border); }
+  .cover-chip.toast { background: var(--color-success-subtle); color: var(--color-success-text); border-color: var(--color-success-border); }
+  .review-table { width: 100%; border-collapse: collapse; font-size: var(--font-size-small); }
+  .review-table th { text-align: left; font-size: var(--font-size-micro); font-weight: var(--font-weight-medium); color: var(--color-text-secondary); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-border); }
+  .review-table td { padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--color-divider); vertical-align: top; }
+  .review-table tr:last-child td { border-bottom: none; }
+  .review-table code { font-family: var(--font-mono); font-size: var(--font-size-micro); background: var(--color-surface-sunken); border: 1px solid var(--color-divider); border-radius: var(--radius-xs); padding: 1px 5px; }
+  @media (max-width: 1080px) { .page-grid { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<script>window.PROTO = { bare: true };</script>
+<script src="assets/icons.js"></script>
+<script src="assets/app.js"></script>
+
+<div class="review-wrap">
+  <!-- ===== 头部 ===== -->
+  <header class="review-hero">
+    <h1><span class="proto-tag">PROTO</span> Codex-O 原型评审入口</h1>
+    <div class="review-meta">
+      <span>产品：<b>Codex-O</b> — Codex CLI 中文用户的 Skill 管理 + 会话/Token 统计桌面工具</span>
+      <span>设计系统：<b>方案A · Linear 定制（浅色优先）</b></span>
+      <span>窗口基准：<b class="mono">1280×800</b></span>
+      <span>页面数：<b class="mono">9</b></span>
+      <span>技术：<b>纯 HTML + CSS + vanilla JS，零外部依赖，离线可开</b></span>
+    </div>
+    <div class="legend">
+      <span class="row-flex gap4"><span class="tag tag-user">P0</span> 核心页，精做</span>
+      <span class="row-flex gap4"><span class="tag tag-market">P1</span> 完整功能，正常粒度</span>
+      <span class="row-flex gap4"><span class="tag tag-p2">P2</span> 占位级（v1.x 后续）</span>
+      <span class="row-flex gap4"><span class="cover-chip modal">弹窗</span><span class="cover-chip toast">Toast</span><span class="cover-chip">状态视图</span> 页面覆盖的全局层</span>
+    </div>
+  </header>
+
+  <!-- ===== 使用说明 ===== -->
+  <section class="section">
+    <div class="callout callout-info">
+      <i data-icon="info" data-size="14"></i>
+      <div>
+        每个页面顶部有灰色虚线 <b>PROTO 工具条</b>（非产品 UI）：可切换 <b>正常 / 骨架屏 / 空数据 / 错误</b> 视图、模拟 <b>AI 降级 / 不可用</b>、触发本页弹窗与 Toast。
+        快捷键：<span class="kbd">⌘K</span> 聚焦搜索 · <span class="kbd">Esc</span> 关闭弹窗。页面间跳转均为真实链接（列表 → 详情、市场 ⇄ 安装、统计 → 会话详情 <code>sessions.html#detail</code>）。
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 9 页清单 ===== -->
+  <section class="section">
+    <div class="section-head">
+      <h2 class="section-title">页面清单</h2>
+      <span class="count-badge primary">9</span>
+      <span class="section-note ml-auto">点击卡片打开对应页面（缩略图为 1280×800 实时渲染缩放预览）</span>
+    </div>
+    <div class="page-grid" id="pageGrid">
+
+      <a class="page-card" href="pages/skill-list.html">
+        <div class="page-shot"><iframe src="pages/skill-list.html" loading="lazy" title="Skill 列表页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">① Skill 列表（首页）<span class="tag tag-user">P0</span></div>
+          <div class="page-prd">PRD P0-01 · pages/skill-list.html</div>
+          <div class="page-covers">
+            <span class="cover-chip">骨架屏</span><span class="cover-chip">空态</span><span class="cover-chip">错误</span><span class="cover-chip">AI 降级/不可用</span><span class="cover-chip">搜索无结果</span><span class="cover-chip">批量解析进度</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/skill-detail.html">
+        <div class="page-shot"><iframe src="pages/skill-detail.html" loading="lazy" title="Skill 详情页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">② Skill 详情 <span class="tag tag-user">P0</span></div>
+          <div class="page-prd">PRD P0-02 · pages/skill-detail.html</div>
+          <div class="page-covers">
+            <span class="cover-chip modal">卸载二次确认</span><span class="cover-chip">AI 三要素/降级</span><span class="cover-chip">相似对比</span><span class="cover-chip">骨架屏</span><span class="cover-chip">错误</span><span class="cover-chip toast">重新解析</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/market.html">
+        <div class="page-shot"><iframe src="pages/market.html" loading="lazy" title="Skill 市场页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">③ Skill 市场 <span class="tag tag-market">P1</span></div>
+          <div class="page-prd">PRD P1-01 · pages/market.html</div>
+          <div class="page-covers">
+            <span class="cover-chip modal">安装前 AI 预览</span><span class="cover-chip toast">安装完成</span><span class="cover-chip">分类筛选</span><span class="cover-chip">骨架屏</span><span class="cover-chip">空态</span><span class="cover-chip">错误</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/install.html">
+        <div class="page-shot"><iframe src="pages/install.html" loading="lazy" title="安装页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">④ 安装 Skill <span class="tag tag-user">P0</span></div>
+          <div class="page-prd">PRD P0-03 · pages/install.html</div>
+          <div class="page-covers">
+            <span class="cover-chip modal">同名冲突</span><span class="cover-chip">本地导入校验</span><span class="cover-chip">GitHub 拉取中/失败</span><span class="cover-chip toast">安装完成</span><span class="cover-chip">3 Tab</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/updates.html">
+        <div class="page-shot"><iframe src="pages/updates.html" loading="lazy" title="更新中心预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">⑤ 更新中心 <span class="tag tag-market">P1</span></div>
+          <div class="page-prd">PRD P1-02 · pages/updates.html</div>
+          <div class="page-covers">
+            <span class="cover-chip toast">更新完成</span><span class="cover-chip">检查中 loading</span><span class="cover-chip">全部最新</span><span class="cover-chip">检查失败</span><span class="cover-chip">已最新折叠组</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/sessions.html">
+        <div class="page-shot"><iframe src="pages/sessions.html" loading="lazy" title="会话管理页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">⑥ 会话管理 <span class="tag tag-market">P1</span></div>
+          <div class="page-prd">PRD P1-03 · pages/sessions.html</div>
+          <div class="page-covers">
+            <span class="cover-chip modal">删除影响确认</span><span class="cover-chip modal">最近删除恢复</span><span class="cover-chip">完整对话预览</span><span class="cover-chip">原始 rollout 下载</span><span class="cover-chip">项目分组折叠</span><span class="cover-chip">搜索高亮</span><span class="cover-chip">空态</span><span class="cover-chip">错误</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/token-stats.html">
+        <div class="page-shot"><iframe src="pages/token-stats.html" loading="lazy" title="Token 统计页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">⑦ Token 统计 <span class="tag tag-market">P1</span></div>
+          <div class="page-prd">PRD P1-04 · pages/token-stats.html</div>
+          <div class="page-covers">
+            <span class="cover-chip">5 统计卡</span><span class="cover-chip">维度分布图</span><span class="cover-chip">日/周/月趋势（纯 SVG）</span><span class="cover-chip">Top N</span><span class="cover-chip">费用估算</span><span class="cover-chip">骨架/空态/错误</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/settings.html">
+        <div class="page-shot"><iframe src="pages/settings.html" loading="lazy" title="设置页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">⑧ 设置 <span class="tag tag-user">P0</span></div>
+          <div class="page-prd">PRD P0-04 · pages/settings.html</div>
+          <div class="page-covers">
+            <span class="cover-chip">Provider 三联联动</span><span class="cover-chip">测试连接成功/失败</span><span class="cover-chip">未配置引导</span><span class="cover-chip toast">保存成功</span>
+          </div>
+        </div>
+      </a>
+
+      <a class="page-card" href="pages/mcp.html">
+        <div class="page-shot"><iframe src="pages/mcp.html" loading="lazy" title="MCP 管理页预览"></iframe></div>
+        <div class="page-info">
+          <div class="page-name">⑨ MCP 管理 <span class="tag tag-p2">P2</span></div>
+          <div class="page-prd">PRD P2-01 · pages/mcp.html · v1.x 后续（占位级）</div>
+          <div class="page-covers">
+            <span class="cover-chip modal">添加 Server</span><span class="cover-chip">启用开关</span><span class="cover-chip">占位标注</span>
+          </div>
+        </div>
+      </a>
+
+    </div>
+  </section>
+
+  <!-- ===== 全局层覆盖 ===== -->
+  <section class="section">
+    <div class="section-head"><h2 class="section-title">全局弹窗 / 反馈覆盖清单</h2></div>
+    <div class="card" style="padding: 0;">
+      <table class="review-table">
+        <thead><tr><th style="width: 220px;">组件</th><th style="width: 200px;">所在页面</th><th>触发方式</th></tr></thead>
+        <tbody>
+          <tr><td class="w600">卸载二次确认（危险范式）</td><td><code>skill-detail.html</code></td><td>PROTO 工具条「卸载确认弹窗」或详情页「卸载」按钮；默认焦点在「取消」</td></tr>
+          <tr><td class="w600">同名冲突提示</td><td><code>install.html</code></td><td>PROTO 工具条「同名冲突弹窗」；覆盖 / 取消二选一</td></tr>
+          <tr><td class="w600">安装前 AI 预览（轻量版）</td><td><code>market.html</code></td><td>点击任意未安装卡片的「安装」按钮</td></tr>
+          <tr><td class="w600">删除会话影响确认</td><td><code>sessions.html#detail</code></td><td>会话详情视图「删除」；展示 rollout、关联索引、Subagent 关系与 7 天恢复期</td></tr>
+          <tr><td class="w600">最近删除与恢复</td><td><code>sessions.html#detail</code></td><td>会话详情视图「最近删除」；恢复 rollout 文件与会话索引</td></tr>
+          <tr><td class="w600">更新完成 Toast</td><td><code>updates.html</code></td><td>「全部更新」或单个「更新」→「已更新并自动重新解析」</td></tr>
+          <tr><td class="w600">安装完成 Toast</td><td><code>market.html / install.html</code></td><td>「已安装，AI 解析完成」</td></tr>
+          <tr><td class="w600">测试连接反馈</td><td><code>settings.html</code></td><td>成功 ✓ 模型可用（延迟）/ 失败 401 原因；PROTO 可切「模拟失败」</td></tr>
+          <tr><td class="w600">全局 AI 降级横幅</td><td>全部 9 页</td><td>PROTO 工具条 AI「降级 / 不可用」；横幅含「重试连接 / 去设置 / 关闭」</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== 设计令牌合规 ===== -->
+  <section class="section">
+    <div class="section-head"><h2 class="section-title">设计令牌合规说明</h2></div>
+    <div class="card">
+      <ul style="list-style: none; display: grid; gap: var(--space-2); font-size: var(--font-size-small); color: var(--color-text-secondary);">
+        <li class="row-flex gap8"><i data-icon="check-circle" data-size="14" style="color: var(--color-success-text);"></i><span><code>assets/tokens.css</code> 原样收录 DESIGN.md §1 全部 <code>:root</code> 变量（含 dark 块）；组件规范中具名色（骨架底 / Toast 深底 / shimmer 高光等）统一补登记为变量。</span></li>
+        <li class="row-flex gap8"><i data-icon="check-circle" data-size="14" style="color: var(--color-success-text);"></i><span>全部样式只引用 <code>var(--*)</code>；页面内 <code>&lt;style&gt;</code> 仅含页面专属布局（如同理引用变量）。可用 <code>grep -n "#[0-9a-fA-F]\{3,6\}" assets/app.css pages/*.html</code> 验证无硬编码色值。</span></li>
+        <li class="row-flex gap8"><i data-icon="check-circle" data-size="14" style="color: var(--color-success-text);"></i><span>路径 / 版本号 / Token 数字 / 代码均走 <code>--font-mono</code> + <code>tabular-nums</code>；图标为 1.5px 线性内联 SVG（<code>assets/icons.js</code>），无 emoji、无外部字体/CDN。</span></li>
+        <li class="row-flex gap8"><i data-icon="check-circle" data-size="14" style="color: var(--color-success-text);"></i><span>动效 ≤300ms、ease-out 为主、弹窗 fade+scale，含 <code>prefers-reduced-motion</code> 降级媒体查询。</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <footer class="section t3 s12" style="border-top: 1px solid var(--color-divider); padding-top: var(--space-4);">
+    Codex-O 原型 · Phase 3 产出（筑原型） · 依据 <span class="mono">BRIEF.md</span> / <span class="mono">DESIGN.md</span> 构建 · 数据为评审用示例数据
+  </footer>
+</div>
+
+<script>
+  /* 缩略图 iframe 按容器宽度等比缩放（1280×800 → 卡片宽） */
+  function fitShots() {
+    document.querySelectorAll('.page-shot').forEach(function (box) {
+      var iframe = box.querySelector('iframe');
+      iframe.style.transform = 'scale(' + (box.clientWidth / 1280) + ')';
+    });
+  }
+  window.addEventListener('resize', fitShots);
+  fitShots();
+</script>
+</body>
+</html>

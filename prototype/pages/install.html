@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<!-- 页面: 安装 Skill | 对应 PRD: P0-03 | 优先级: P0
+     覆盖: 3 Tab（本地导入 / GitHub 拉取 / 市场安装）
+           本地: 格式校验反馈(成功+失败) / 同名冲突弹窗(覆盖·取消)
+           GitHub: 拉取中步骤状态 / description + AI 中文预览 / 失败错误原因
+           市场: 跳转说明 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安装 Skill · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<style>
+  .pick-card { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-4); text-align: left; width: 100%; }
+  .pick-card .skill-icon { width: 36px; height: 36px; }
+  .check-line { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-size-small); padding: 3px 0; }
+  .check-line .ok { color: var(--color-success-text); display: flex; }
+  .check-line .bad { color: var(--color-danger-text); display: flex; }
+</style>
+<script>
+  window.PROTO = {
+    name: '安装 Skill · P0-03',
+    states: ['normal'],
+    aiStates: true,
+    actions: [
+      { id: 'conflict', label: '同名冲突弹窗' },
+      { id: 'localErr', label: '校验失败演示' },
+      { id: 'ghErr', label: '拉取失败演示' }
+    ]
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item active" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>安装 Skill</h1>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，安装后将跳过中文解析</span>
+        <span class="ai-text-down">AI 服务不可用，安装后将跳过中文解析</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+      <div class="container-narrow" data-tabscope>
+
+      <section data-view="normal">
+        <div class="tabs" data-tabs>
+          <button class="tab active" data-tab="local">本地导入</button>
+          <button class="tab" data-tab="github">GitHub 拉取</button>
+          <button class="tab" data-tab="market">市场安装</button>
+        </div>
+
+        <!-- ===== Tab 1: 本地导入 ===== -->
+        <div data-tab-panel="local" class="mt16">
+          <div class="rows">
+            <button class="row hover pick-card" id="btnPickFile" style="border-bottom: 1px solid var(--color-divider);">
+              <span class="skill-icon"><i data-icon="file-text" data-size="16"></i></span>
+              <span style="flex: 1;">
+                <span class="w600" style="display: block;">选择 SKILL.md 文件</span>
+                <span class="s12 t3">单个技能文件，需包含 frontmatter（name + description）</span>
+              </span>
+              <i data-icon="chevron-right" data-size="14" class="t3"></i>
+            </button>
+            <button class="row hover pick-card" id="btnPickDir">
+              <span class="skill-icon"><i data-icon="folder" data-size="16"></i></span>
+              <span style="flex: 1;">
+                <span class="w600" style="display: block;">选择 skill 目录</span>
+                <span class="s12 t3">含 SKILL.md 与 references / scripts / agents 附属目录（推荐）</span>
+              </span>
+              <i data-icon="chevron-right" data-size="14" class="t3"></i>
+            </button>
+          </div>
+
+          <!-- 校验成功面板 -->
+          <div class="card mt16" id="localOk" hidden>
+            <div class="row-flex gap8">
+              <span class="pill pill-success"><span class="dot"></span>格式校验通过</span>
+              <span class="mono s12 t2 ellipsis">~/Downloads/linear-workflow/</span>
+            </div>
+            <div class="mt12">
+              <div class="check-line"><span class="ok"><i data-icon="check" data-size="14"></i></span><span class="mono s12">name: linear-workflow</span></div>
+              <div class="check-line"><span class="ok"><i data-icon="check" data-size="14"></i></span><span class="mono s12">description: 187 字符（要求 20–1024）</span></div>
+              <div class="check-line"><span class="ok"><i data-icon="check" data-size="14"></i></span><span class="mono s12">附属目录: references/（2 个文件）· scripts/（1 个文件）</span></div>
+            </div>
+            <div class="callout callout-info mt12"><i data-icon="sparkles" data-size="14"></i>导入后将由 gpt-4o-mini 自动生成中文解析，约需 2 秒。</div>
+            <div class="row-flex gap8 mt12">
+              <button class="btn btn-primary" id="btnImportOk"><i data-icon="download" data-size="14"></i>确认导入</button>
+              <button class="btn btn-ghost" id="btnRePick1">重新选择</button>
+            </div>
+          </div>
+
+          <!-- 校验失败面板 -->
+          <div class="card mt16" id="localErr" hidden>
+            <div class="row-flex gap8">
+              <span class="pill pill-danger"><span class="dot bad"></span>格式校验失败</span>
+              <span class="mono s12 t2 ellipsis">~/Downloads/my-skill/SKILL.md</span>
+            </div>
+            <div class="mt12">
+              <div class="check-line"><span class="ok"><i data-icon="check" data-size="14"></i></span><span class="mono s12">name: my-skill</span></div>
+              <div class="check-line"><span class="bad"><i data-icon="x" data-size="14"></i></span><span class="mono s12">description: 缺失（frontmatter 第 4 行附近）</span></div>
+            </div>
+            <div class="callout callout-danger mt12"><i data-icon="alert" data-size="14"></i>SKILL.md 的 frontmatter 必须包含 name 与 description 两个必填字段。补充后重新选择即可。</div>
+            <div class="row-flex gap8 mt12">
+              <button class="btn btn-secondary" id="btnRePick2"><i data-icon="folder-open" data-size="14"></i>重新选择</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== Tab 2: GitHub 拉取 ===== -->
+        <div data-tab-panel="github" class="mt16" hidden>
+          <div class="card">
+            <label class="field-label" for="ghUrl">仓库地址</label>
+            <div class="row-flex gap8">
+              <input class="input mono" id="ghUrl" type="text" value="anthropics/skills-pdf-tools" placeholder="user/repo 或 user/repo/path/to/skill" style="flex: 1;">
+              <button class="btn btn-primary" id="btnFetch"><i data-icon="github" data-size="14"></i>拉取</button>
+            </div>
+            <p class="field-hint">支持公开仓库；拉取私有仓库请在「设置」中配置 GitHub Token。</p>
+          </div>
+
+          <!-- 拉取中 -->
+          <div class="card mt16" id="ghProgress" hidden>
+            <div class="row-flex gap8"><span class="spinner"></span><span class="w600 s12">正在拉取 anthropics/skills-pdf-tools…</span></div>
+            <ul class="steps mt12">
+              <li class="done" id="ghStep1"><i data-icon="check-circle" data-size="14"></i>连接 GitHub</li>
+              <li class="doing" id="ghStep2"><span class="spinner" style="width: 12px; height: 12px;"></span>下载 SKILL.md</li>
+              <li id="ghStep3"><i data-icon="clock" data-size="14"></i>校验格式</li>
+            </ul>
+          </div>
+
+          <!-- 拉取成功预览 -->
+          <div class="card mt16" id="ghPreview" hidden>
+            <div class="row-flex gap8">
+              <span class="pill pill-success"><span class="dot"></span>拉取成功</span>
+              <span class="skill-name mono">pdf-tools</span>
+              <span class="s11 t3 mono">SKILL.md · 8.9 KB</span>
+            </div>
+            <p class="s12 t2 mt12" style="line-height: var(--line-height-body);">Create, fill and annotate PDF documents: form filling, digital signatures, page extraction and OCR-friendly exports.</p>
+            <div class="ai-block mt12">
+              <div class="ai-block-head" style="margin-bottom: var(--space-2);">
+                <span class="ai-label"><i data-icon="sparkles" data-size="14"></i>AI 中文预览</span>
+                <span class="ai-model">gpt-4o-mini</span>
+              </div>
+              <div class="ai-part">
+                <div class="ai-key">作用</div>
+                <p class="ai-body">创建、填写与批注 PDF 文档：表单填充、数字签名、页面提取与 OCR 友好导出。</p>
+              </div>
+              <div class="ai-part">
+                <div class="ai-key">使用场景</div>
+                <ul class="ai-scenes">
+                  <li>当用户需要生成或修改 PDF 文件时</li>
+                  <li>当用户要求填写 PDF 表单或添加签名时</li>
+                </ul>
+              </div>
+            </div>
+            <div class="row-flex gap8 mt12">
+              <button class="btn btn-primary" id="btnGhInstall"><i data-icon="download" data-size="14"></i>确认安装</button>
+              <button class="btn btn-ghost" id="btnGhCancel">取消</button>
+            </div>
+          </div>
+
+          <!-- 拉取失败 -->
+          <div class="mt16" id="ghError" hidden>
+            <div class="callout callout-danger">
+              <i data-icon="alert" data-size="14"></i>
+              <div>
+                <b>拉取失败：仓库不存在或未包含 SKILL.md（HTTP 404）</b>
+                <div class="mono s11 mt4" style="opacity: .85;">GET https://api.github.com/repos/anthropics/skills-pdf-tools/contents/SKILL.md → 404 Not Found</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== Tab 3: 市场安装 ===== -->
+        <div data-tab-panel="market" class="mt16" hidden>
+          <div class="empty" style="padding: var(--space-12) var(--space-6);">
+            <div class="empty-icon"><i data-icon="store" data-size="40"></i></div>
+            <div class="empty-title">从市场安装</div>
+            <p class="empty-desc">市场收录 39 个官方精选 Skill，覆盖设计、开发、文档、办公等 7 个分类。一键安装并自动完成 AI 中文解析。</p>
+            <a class="btn btn-primary" href="market.html"><i data-icon="store" data-size="14"></i>前往 Skill 市场</a>
+            <p class="s11 t3 mt12">已安装 9 个市场 Skill · 上次同步 2 小时前</p>
+          </div>
+        </div>
+      </section>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 同名冲突弹窗 ===== -->
+<div class="modal-overlay" id="modal-conflict">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-title"><span class="danger-ic"><i data-icon="alert" data-size="16"></i></span>已存在同名 Skill</div>
+    <div class="modal-body">
+      <p><span class="mono w600">linear-workflow</span> 已安装，继续将覆盖现有版本：</p>
+      <div class="path-block mt8">~/.codex/skills/linear-workflow/（2025-08-12 安装 · 本地自建）</div>
+      <div class="callout callout-warning mt12"><i data-icon="alert" data-size="14"></i>覆盖后原 Skill 的修改将丢失，AI 解析结果会重新生成。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" data-close-modal data-autofocus>取消</button>
+      <button class="btn btn-danger" id="btnOverwrite">覆盖安装</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== 安装页交互 ===== */
+(function () {
+  /* --- Tab1 本地导入 --- */
+  var localOk = document.getElementById('localOk');
+  var localErr = document.getElementById('localErr');
+
+  function pickSource(btn) {
+    btn.disabled = true;
+    var old = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span><span class="s12 t2">读取并校验格式…</span>';
+    localOk.hidden = true; localErr.hidden = true;
+    setTimeout(function () {
+      btn.disabled = false; btn.innerHTML = old; window.ProtoIcons(btn);
+      localOk.hidden = false;
+      localOk.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 800);
+  }
+  document.getElementById('btnPickFile').addEventListener('click', function () { pickSource(this); });
+  document.getElementById('btnPickDir').addEventListener('click', function () { pickSource(this); });
+  document.getElementById('btnRePick1').addEventListener('click', function () { localOk.hidden = true; });
+  document.getElementById('btnRePick2').addEventListener('click', function () { localErr.hidden = true; });
+
+  document.getElementById('btnImportOk').addEventListener('click', function () {
+    localOk.hidden = true;
+    window.showToast({ type: 'success', title: '已安装，AI 解析完成', desc: 'linear-workflow 已可在会话中使用' });
+  });
+
+  /* --- Tab2 GitHub 拉取 --- */
+  var ghProgress = document.getElementById('ghProgress');
+  var ghPreview = document.getElementById('ghPreview');
+  var ghError = document.getElementById('ghError');
+
+  document.getElementById('btnFetch').addEventListener('click', function () {
+    ghError.hidden = true; ghPreview.hidden = true; ghProgress.hidden = false;
+    var s2 = document.getElementById('ghStep2');
+    var s3 = document.getElementById('ghStep3');
+    setTimeout(function () {
+      s2.className = 'done';
+      s2.innerHTML = '';
+      var i = document.createElement('i'); i.setAttribute('data-icon', 'check-circle'); i.setAttribute('data-size', '14');
+      s2.appendChild(i); s2.appendChild(document.createTextNode('下载 SKILL.md'));
+      window.ProtoIcons(s2);
+      s3.className = 'doing';
+      s3.innerHTML = '<span class="spinner" style="width: 12px; height: 12px;"></span>校验格式';
+    }, 900);
+    setTimeout(function () {
+      ghProgress.hidden = true;
+      ghPreview.hidden = false;
+    }, 1700);
+  });
+  document.getElementById('btnGhCancel').addEventListener('click', function () { ghPreview.hidden = true; });
+  document.getElementById('btnGhInstall').addEventListener('click', function () {
+    ghPreview.hidden = true;
+    window.showToast({ type: 'success', title: '已安装，AI 解析完成', desc: 'pdf-tools 已可在会话中使用' });
+  });
+
+  /* --- PROTO 演示动作 --- */
+  window.PROTO_ACTIONS = {
+    conflict: function () { window.ProtoOpenModal('modal-conflict'); },
+    localErr: function () {
+      /* 切到本地 Tab 并展示校验失败面板 */
+      document.querySelector('[data-tab="local"]').click();
+      localOk.hidden = true; localErr.hidden = false;
+    },
+    ghErr: function () {
+      document.querySelector('[data-tab="github"]').click();
+      ghProgress.hidden = true; ghPreview.hidden = true; ghError.hidden = false;
+    }
+  };
+
+  document.getElementById('btnOverwrite').addEventListener('click', function () {
+    window.ProtoCloseModal('modal-conflict');
+    window.showToast({ type: 'success', title: '已覆盖安装 linear-workflow', desc: 'AI 已重新生成中文解析' });
+  });
+})();
+</script>
+</body>
+</html>

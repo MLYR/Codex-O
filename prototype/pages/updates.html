@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<!-- 页面: 更新中心 | 对应 PRD: P1-02 | 优先级: P1
+     覆盖: 一键检查(loading) / 可更新列表(当前版→最新版 mono) / 已最新折叠组(19)
+           单个更新 + 批量更新流程 / 更新完成 Toast「已自动重新解析」 / 全部最新空态 / 检查失败 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>更新中心 · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<script>
+  window.PROTO = {
+    name: '更新中心 · P1-02',
+    states: ['normal', 'loading', 'empty', 'error'],
+    aiStates: true,
+    actions: [{ id: 'check', label: '检查更新演示' }, { id: 'updateAll', label: '批量更新演示' }]
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item active" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>更新中心</h1>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，更新后将跳过自动重新解析</span>
+        <span class="ai-text-down">AI 服务不可用，更新后将跳过自动重新解析</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+      <div class="container-narrow">
+
+      <!-- ========== 视图: 正常 ========== -->
+      <section data-view="normal">
+        <!-- 检查操作区 -->
+        <div class="card row-flex gap12">
+          <button class="btn btn-primary" id="btnCheck"><i data-icon="refresh" data-size="14"></i>一键检查更新</button>
+          <div class="s12 t2">
+            上次检查 <span class="mono" id="lastCheck">2025-12-19 09:41</span>
+            <span class="t3"> · 来源：GitHub Releases + 市场索引</span>
+          </div>
+          <span class="pill pill-info ml-auto"><span class="dot info"></span>2 个可更新</span>
+        </div>
+
+        <!-- 可更新列表 -->
+        <div class="section">
+          <div class="section-head">
+            <h2 class="section-title">可更新</h2>
+            <span class="count-badge info">2</span>
+            <button class="btn btn-sm btn-secondary ml-auto" id="btnUpdateAll">全部更新</button>
+          </div>
+          <div class="rows" id="updateList">
+            <div class="row hover" data-name="frontend-design" data-newver="v1.3.0">
+              <span class="skill-icon" style="width: 28px; height: 28px; font-size: var(--font-size-small);">F</span>
+              <div style="flex: 1; min-width: 0;">
+                <div class="w600 mono">frontend-design</div>
+                <div class="s11 t3">GitHub · 新增 2 个 reference 文档，修复触发词歧义</div>
+              </div>
+              <span class="mono s12 t2" style="white-space: nowrap;">v1.2.0 <span class="t3">→</span> <span class="w600" style="color: var(--color-info-text);">v1.3.0</span></span>
+              <a class="s12" href="#" onclick="return false;">更新日志</a>
+              <button class="btn btn-sm btn-primary" data-update-one>更新</button>
+            </div>
+            <div class="row hover" data-name="pdfkit-py" data-newver="v1.2.0">
+              <span class="skill-icon" style="width: 28px; height: 28px; font-size: var(--font-size-small);">P</span>
+              <div style="flex: 1; min-width: 0;">
+                <div class="w600 mono">pdfkit-py</div>
+                <div class="s11 t3">市场安装 · 合并拆分性能提升，新增中文水印示例</div>
+              </div>
+              <span class="mono s12 t2" style="white-space: nowrap;">v1.1.0 <span class="t3">→</span> <span class="w600" style="color: var(--color-info-text);">v1.2.0</span></span>
+              <a class="s12" href="#" onclick="return false;">更新日志</a>
+              <button class="btn btn-sm btn-primary" data-update-one>更新</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 已最新（折叠组） -->
+        <div class="section">
+          <div class="collapse">
+            <div class="collapse-head" style="min-height: 40px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">已是最新</span>
+              <span class="count-badge">19</span>
+              <span class="s11 t3 ml-auto">版本号为 — 的 Skill 以文件哈希判断是否变更</span>
+            </div>
+            <div class="collapse-body">
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">agent-reach</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">api-doc-writer</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">code-review-zh</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">codex-token-usage</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">docker-helper</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">docx</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">git-commit-zh</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">huashu-design</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">impeccable</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">obsidian-sync</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">playwright-test</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">pptx</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">tdesign-react</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">tencentmap-map-assistant</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">ui-ux-pro-max</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">web-animation-design</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">weekly-report-cn</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px;"><span class="mono s12" style="flex: 1;">wechat-miniprogram</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+              <div class="row" style="min-height: 32px; border-bottom: none;"><span class="mono s12" style="flex: 1;">xlsx</span><span class="mono s11 t3">—</span><span class="s11" style="color: var(--color-success-text); width: 64px; text-align: right;">已是最新</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 骨架屏（检查中） ========== -->
+      <section data-view="loading" hidden>
+        <div class="card row-flex gap12">
+          <span class="spinner"></span>
+          <div class="s12 w600">正在检查更新…</div>
+          <span class="s11 t3 mono">GitHub Releases 2/8 · 市场索引 1/1</span>
+        </div>
+        <div class="section">
+          <div class="sk sk-text" style="width: 100px; margin-bottom: var(--space-3);"></div>
+          <div class="rows">
+            <div class="row"><div class="sk sk-text" style="width: 40%;"></div><div class="sk sk-text ml-auto" style="width: 120px;"></div></div>
+            <div class="row"><div class="sk sk-text" style="width: 35%;"></div><div class="sk sk-text ml-auto" style="width: 120px;"></div></div>
+            <div class="row"><div class="sk sk-text" style="width: 45%;"></div><div class="sk sk-text ml-auto" style="width: 120px;"></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 空数据（全部最新） ========== -->
+      <section data-view="empty" hidden>
+        <div class="empty">
+          <div class="empty-icon" style="background: var(--color-success-subtle); color: var(--color-success-text);"><i data-icon="check-circle" data-size="40"></i></div>
+          <div class="empty-title">所有 Skill 均为最新版本</div>
+          <p class="empty-desc">上次检查：<span class="mono">2025-12-19 09:41</span> · 21 个用户 Skill + 6 个系统 Skill 均无可用更新。</p>
+          <button class="btn btn-secondary" id="btnRecheck"><i data-icon="refresh" data-size="14"></i>重新检查</button>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 错误 ========== -->
+      <section data-view="error" hidden>
+        <div class="empty is-error">
+          <div class="empty-icon"><i data-icon="alert" data-size="40"></i></div>
+          <div class="empty-title">检查更新失败</div>
+          <p class="empty-desc">网络不可用，或 GitHub API 触发限流。稍候重试即可。</p>
+          <div class="path-block">api.github.com · HTTP 403 rate limit exceeded</div>
+          <button class="btn btn-primary" id="btnRetryCheck"><i data-icon="refresh" data-size="14"></i>重试</button>
+        </div>
+      </section>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+/* ===== 更新中心交互 ===== */
+(function () {
+  /* 单个更新 */
+  function updateRow(row) {
+    var btn = row.querySelector('[data-update-one]');
+    if (!btn) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>更新中';
+    setTimeout(function () {
+      var name = row.getAttribute('data-name');
+      var ver = row.getAttribute('data-newver');
+      row.innerHTML =
+        '<span class="row-flex gap8" style="color: var(--color-success-text); flex: 1;">' +
+        '<svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + window.ICONS['check-circle'] + '</svg>' +
+        '<span class="mono w600">' + name + '</span><span class="s12">已更新至 ' + ver + ' · 已自动重新解析</span></span>' +
+        '<span class="mono s11 t3">' + ver + '</span>';
+      row.style.background = 'var(--color-success-subtle)';
+      window.showToast({ type: 'success', title: '已更新并自动重新解析', desc: name + ' ' + ver });
+    }, 1500);
+  }
+  document.querySelectorAll('[data-update-one]').forEach(function (btn) {
+    btn.addEventListener('click', function () { updateRow(btn.closest('.row')); });
+  });
+
+  /* 批量更新 */
+  function updateAll() {
+    var rows = Array.prototype.slice.call(document.querySelectorAll('#updateList .row[data-name]'));
+    rows.forEach(function (row, i) { setTimeout(function () { updateRow(row); }, i * 600); });
+  }
+  document.getElementById('btnUpdateAll').addEventListener('click', updateAll);
+
+  /* 检查更新 */
+  function check() {
+    var btn = document.getElementById('btnCheck');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>检查中…';
+    window.ProtoSetView('loading');
+    setTimeout(function () {
+      window.ProtoSetView('normal');
+      btn.disabled = false;
+      btn.innerHTML = '';
+      var i = document.createElement('i'); i.setAttribute('data-icon', 'refresh'); i.setAttribute('data-size', '14');
+      btn.appendChild(i); btn.appendChild(document.createTextNode('一键检查更新'));
+      window.ProtoIcons(btn);
+      document.getElementById('lastCheck').textContent = '2025-12-19 16:20';
+      window.showToast({ type: 'info', title: '检查完成', desc: '发现 2 个可更新 Skill' });
+    }, 2000);
+  }
+  document.getElementById('btnCheck').addEventListener('click', check);
+
+  window.PROTO_ACTIONS = { check: check, updateAll: updateAll };
+})();
+</script>
+</body>
+</html>

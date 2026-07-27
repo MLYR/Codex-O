@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<!-- 页面: 会话管理 | 对应 PRD: P2-02~P2-06 | 里程碑: M3
+     覆盖: 全文搜索(关键词高亮) / 按项目分组折叠列表(6 组 54 会话，各组仅展示最近 N 条)
+           会话卡片(标题/模型/来源/时间/Token/大小/摘要) / 完整用户-助手对话预览
+           原始 rollout 下载 / 安全删除确认 / 最近删除恢复 / 骨架屏 / 空态 / 错误态(sqlite 锁)
+     备注: 列表中「仅展示最近 N 个」为原型截断，正式版加载全部 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>会话管理 · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<style>
+  .session-more { padding: var(--space-2) var(--space-4); font-size: var(--font-size-micro); color: var(--color-text-tertiary); text-align: center; background: var(--color-surface-sunken); }
+  .detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+  .git-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-family: var(--font-mono); font-size: var(--font-size-small); font-variant-numeric: tabular-nums; }
+  .conversation-head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-3); }
+  .conversation-stream { border-top: 1px solid var(--color-border); }
+  .message-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: var(--space-3); padding: var(--space-4) 0; border-bottom: 1px solid var(--color-divider); }
+  .message-avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--radius-md); font-size: var(--font-size-micro); font-weight: var(--font-weight-semibold); background: var(--color-surface-sunken); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .message-row.assistant .message-avatar { color: var(--color-primary-text); background: var(--color-primary-subtle); border-color: var(--color-primary-border); }
+  .message-main { min-width: 0; }
+  .message-meta { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); font-size: var(--font-size-micro); color: var(--color-text-tertiary); }
+  .message-role { font-size: var(--font-size-small); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); }
+  .message-text { color: var(--color-text-secondary); font-size: var(--font-size-body); line-height: var(--line-height-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .phase-chip { padding: 1px 6px; border-radius: var(--radius-full); font-size: var(--font-size-micro); color: var(--color-primary-text); background: var(--color-primary-subtle); }
+  .phase-chip.final { color: var(--color-success-text); background: var(--color-success-subtle); }
+  .deleted-session { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+</style>
+<script>
+  window.PROTO = {
+    name: '会话管理 · M3',
+    states: ['normal', 'loading', 'empty', 'error'],
+    aiStates: true,
+    actions: [
+      { id: 'openDetail', label: '会话详情视图' },
+      { id: 'delModal', label: '删除确认弹窗' },
+      { id: 'deletedModal', label: '最近删除' }
+    ]
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item active" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>会话管理</h1>
+      <span class="sub">54 个会话 · 20.27 亿 Token · 566 MB</span>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，Skill 解析展示英文原文</span>
+        <span class="ai-text-down">AI 服务不可用，Skill 解析已回退为英文原文</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+
+      <!-- ========== 视图: 正常 ========== -->
+      <section data-view="normal" id="listView">
+        <div class="row-flex gap8" style="flex-wrap: wrap;">
+          <div class="search-box wide">
+            <i data-icon="search" data-size="14"></i>
+            <input class="input" id="q" type="text" placeholder="搜索标题 / 首条消息 / 预览内容…" data-hotkey-search>
+            <span class="kbd">⌘K</span>
+          </div>
+          <div class="select-wrap">
+            <select id="fSort" aria-label="排序方式">
+              <option value="ts">排序：最近更新</option>
+              <option value="tokens">排序：Token 最高</option>
+              <option value="size">排序：占用最大</option>
+            </select>
+            <i data-icon="chevron-down" data-size="14"></i>
+          </div>
+          <span class="s12 t3 ml-auto" id="matchCount">6 个项目 · 54 个会话</span>
+          <button class="btn btn-ghost" id="btnExportCsv"><i data-icon="download" data-size="14"></i>导出 CSV</button>
+          <button class="btn btn-ghost" id="btnExportJson"><i data-icon="download" data-size="14"></i>导出 JSON</button>
+        </div>
+
+        <div class="section" style="margin-top: var(--space-4); display: grid; gap: var(--space-3);" id="groupWrap">
+
+          <!-- ===== XOAssets（默认展开） ===== -->
+          <div class="collapse open" data-group>
+            <div class="collapse-head" style="min-height: 40px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">XOAssets</span>
+              <span class="count-badge">22</span>
+              <span class="collapse-meta">~/CODE/XOAssets</span>
+              <span class="collapse-meta ml-auto">15.3 亿 Token · 412 MB</span>
+            </div>
+            <div class="collapse-body">
+              <div class="session-item" data-ts="101" data-tokens="24100" data-size="38.2" data-open-detail>
+                <div class="session-title ellipsis">素材库批量重命名与压缩</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-14 21:08</span><span class="sep">·</span><span>2.41 亿 Token</span><span class="sep">·</span><span>38.2 MB</span></div>
+                <div class="session-preview clamp2">需要把 assets/raw 下 2,300 个 PSD 批量导出为 WebP 并按类目重命名，保留原始图层命名映射表，失败的文件单独输出清单…</div>
+              </div>
+              <div class="session-item" data-ts="98" data-tokens="15200" data-size="24.6" data-open-detail>
+                <div class="session-title ellipsis">上传链路重构：分片与断点续传</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-12 18:44</span><span class="sep">·</span><span>1.52 亿 Token</span><span class="sep">·</span><span>24.6 MB</span></div>
+                <div class="session-preview clamp2">uploader v2 的分片策略改成 8MB 固定片 + 并发 4，失败分片指数退避重试，断网恢复后从 manifest 续传…</div>
+              </div>
+              <div class="session-item" data-ts="92" data-tokens="9870" data-size="15.1" data-open-detail>
+                <div class="session-title ellipsis">图片 CDN 域名切换迁移</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>cli</span><span class="sep">·</span><span>12-09 15:20</span><span class="sep">·</span><span>9,870 万 Token</span><span class="sep">·</span><span>15.1 MB</span></div>
+                <div class="session-preview clamp2">旧域名 cdn-old 月底下线，先全量扫描影响面：47 个模板、12 个配置文件、3 处硬编码在邮件服务里…</div>
+              </div>
+              <div class="session-item" data-ts="85" data-tokens="8640" data-size="13.8" data-open-detail>
+                <div class="session-title ellipsis">缩略图服务缓存命中率优化</div>
+                <div class="session-meta"><span>gpt-5.6-terra</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-05 11:32</span><span class="sep">·</span><span>8,640 万 Token</span><span class="sep">·</span><span>13.8 MB</span></div>
+                <div class="session-preview clamp2">thumb 服务的 LRU 换成按热度分层缓存，热点图进内存、长尾走磁盘，命中率从 61% 提到 83%…</div>
+              </div>
+              <div class="session-item" data-ts="78" data-tokens="7420" data-size="11.9" data-open-detail>
+                <div class="session-title ellipsis">批量打水印 Worker 内存泄漏排查</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>exec</span><span class="sep">·</span><span>11-28 20:15</span><span class="sep">·</span><span>7,420 万 Token</span><span class="sep">·</span><span>11.9 MB</span></div>
+                <div class="session-preview clamp2">sharp 实例没有复用导致 RSS 涨到 3.2G，改成 worker pool 并限制并发后稳定运行在 480MB…</div>
+              </div>
+              <div class="session-item" data-ts="71" data-tokens="6980" data-size="10.2" data-open-detail>
+                <div class="session-title ellipsis">素材标签体系 v3 设计评审</div>
+                <div class="session-meta"><span>codex-mini-latest</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>11-21 14:02</span><span class="sep">·</span><span>6,980 万 Token</span><span class="sep">·</span><span>10.2 MB</span></div>
+                <div class="session-preview clamp2">三级标签改成「类目 / 属性 / 自由」三轨制，旧数据双写迁移方案，评审通过后再动表结构…</div>
+              </div>
+              <div class="session-more">仅展示最近 6 个 · 共 22 个会话</div>
+            </div>
+          </div>
+
+          <!-- ===== YT ===== -->
+          <div class="collapse" data-group>
+            <div class="collapse-head" style="min-height: 40px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">YT</span>
+              <span class="count-badge">12</span>
+              <span class="collapse-meta">~/CODE/YT</span>
+              <span class="collapse-meta ml-auto">2.3 亿 Token · 78 MB</span>
+            </div>
+            <div class="collapse-body">
+              <div class="session-item" data-ts="100" data-tokens="18600" data-size="29.4" data-open-detail>
+                <div class="session-title ellipsis">播放器内核迁移到 media3</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-13 22:31</span><span class="sep">·</span><span>1.86 亿 Token</span><span class="sep">·</span><span>29.4 MB</span></div>
+                <div class="session-preview clamp2">ExoPlayer 旧封装全部替换，手势区与清晰度切换逻辑保留原交互，后台播放要处理音频焦点…</div>
+              </div>
+              <div class="session-item" data-ts="96" data-tokens="6900" data-size="10.8" data-open-detail>
+                <div class="session-title ellipsis">弹幕渲染性能优化</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-10 19:26</span><span class="sep">·</span><span>6,900 万 Token</span><span class="sep">·</span><span>10.8 MB</span></div>
+                <div class="session-preview clamp2">Canvas 绘制改分层：滚动层与顶部/底部静止层分开合成，高峰期弹幕 60fps 稳定…</div>
+              </div>
+              <div class="session-item" data-ts="88" data-tokens="4120" data-size="6.3" data-open-detail>
+                <div class="session-title ellipsis">直播间礼物动效卡顿</div>
+                <div class="session-meta"><span>codex-mini-latest</span><span class="sep">·</span><span>cli</span><span class="sep">·</span><span>12-02 16:40</span><span class="sep">·</span><span>4,120 万 Token</span><span class="sep">·</span><span>6.3 MB</span></div>
+                <div class="session-preview clamp2">Lottie 动画合成层过多导致掉帧，合并同类图层后掉帧率从 17% 降到 2%…</div>
+              </div>
+              <div class="session-item" data-ts="80" data-tokens="3860" data-size="5.7" data-open-detail>
+                <div class="session-title ellipsis">推荐流接口分页异常</div>
+                <div class="session-meta"><span>gpt-5.6-terra</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>11-25 10:18</span><span class="sep">·</span><span>3,860 万 Token</span><span class="sep">·</span><span>5.7 MB</span></div>
+                <div class="session-preview clamp2">cursor 分页在数据过期时返回重复项，客户端加去重窗口和服务端游标版本号…</div>
+              </div>
+              <div class="session-more">仅展示最近 4 个 · 共 12 个会话</div>
+            </div>
+          </div>
+
+          <!-- ===== ZreoPassword ===== -->
+          <div class="collapse" data-group>
+            <div class="collapse-head" style="min-height: 40px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">ZreoPassword</span>
+              <span class="count-badge">9</span>
+              <span class="collapse-meta">~/CODE/ZreoPassword</span>
+              <span class="collapse-meta ml-auto">1.3 亿 Token · 46 MB</span>
+            </div>
+            <div class="collapse-body">
+              <div class="session-item" data-ts="95" data-tokens="9800" data-size="15.6" data-open-detail>
+                <div class="session-title ellipsis">加密模块安全审计</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-11 20:52</span><span class="sep">·</span><span>9,800 万 Token</span><span class="sep">·</span><span>15.6 MB</span></div>
+                <div class="session-preview clamp2">AES-GCM 的 nonce 生成从计数器改为 CSPRNG 随机值，PBKDF2 迭代次数提升到 600,000…</div>
+              </div>
+              <div class="session-item" data-ts="89" data-tokens="5240" data-size="8.1" data-open-detail>
+                <div class="session-title ellipsis">自动填充在 Safari 失效</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>cli</span><span class="sep">·</span><span>12-06 17:33</span><span class="sep">·</span><span>5,240 万 Token</span><span class="sep">·</span><span>8.1 MB</span></div>
+                <div class="session-preview clamp2">content script 的 shadow DOM 选择器在 Safari 17 失效，改用事件代理 + 原生 autocomplete 检测…</div>
+              </div>
+              <div class="session-item" data-ts="82" data-tokens="3150" data-size="4.6" data-open-detail>
+                <div class="session-title ellipsis">密码强度算法校准</div>
+                <div class="session-meta"><span>codex-mini-latest</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>11-29 13:47</span><span class="sep">·</span><span>3,150 万 Token</span><span class="sep">·</span><span>4.6 MB</span></div>
+                <div class="session-preview clamp2">zxcvbn 词表补充中文拼音与常见姓名模式，「zhangsan123」类弱密码不再误判为中等…</div>
+              </div>
+              <div class="session-more">仅展示最近 3 个 · 共 9 个会话</div>
+            </div>
+          </div>
+
+          <!-- ===== Codex-O ===== -->
+          <div class="collapse" data-group>
+            <div class="collapse-head" style="min-height: 40px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">Codex-O</span>
+              <span class="count-badge">6</span>
+              <span class="collapse-meta">~/CODE/Codex-O</span>
+              <span class="collapse-meta ml-auto">8,900 万 Token · 21 MB</span>
+            </div>
+            <div class="collapse-body">
+              <div class="session-item" data-ts="103" data-tokens="5400" data-size="8.2" data-open-detail>
+                <div class="session-title ellipsis">Skill 列表页原型构建</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-18 16:20</span><span class="sep">·</span><span>5,400 万 Token</span><span class="sep">·</span><span>8.2 MB</span></div>
+                <div class="session-preview clamp2">按 DESIGN.md 的令牌体系实现卡片网格与状态切换器，列表页需要骨架屏、空态和 AI 降级三种视图…</div>
+              </div>
+              <div class="session-item" data-ts="99" data-tokens="1860" data-size="2.9" data-open-detail>
+                <div class="session-title ellipsis">会话分组折叠交互</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-16 11:05</span><span class="sep">·</span><span>1,860 万 Token</span><span class="sep">·</span><span>2.9 MB</span></div>
+                <div class="session-preview clamp2">组头需要聚合会话数、总 Token 与占用空间，chevron 展开旋转 90°…</div>
+              </div>
+              <div class="session-item" data-ts="97" data-tokens="1640" data-size="2.4" data-open-detail>
+                <div class="session-title ellipsis">卸载确认弹窗的危险范式</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>cli</span><span class="sep">·</span><span>12-15 09:48</span><span class="sep">·</span><span>1,640 万 Token</span><span class="sep">·</span><span>2.4 MB</span></div>
+                <div class="session-preview clamp2">目录路径 + 附属文件清单 + 不可撤销警示，默认焦点必须落在「取消」上…</div>
+              </div>
+              <div class="session-more">仅展示最近 3 个 · 共 6 个会话</div>
+            </div>
+          </div>
+
+          <!-- ===== blog-redesign ===== -->
+          <div class="collapse" data-group>
+            <div class="collapse-head" style="min-height: 40px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">blog-redesign</span>
+              <span class="count-badge">4</span>
+              <span class="collapse-meta">~/CODE/blog-redesign</span>
+              <span class="collapse-meta ml-auto">3,100 万 Token · 7 MB</span>
+            </div>
+            <div class="collapse-body">
+              <div class="session-item" data-ts="91" data-tokens="4100" data-size="6.2" data-open-detail>
+                <div class="session-title ellipsis">首页视觉改版：留白与栅格</div>
+                <div class="session-meta"><span>gpt-5.5</span><span class="sep">·</span><span>vscode</span><span class="sep">·</span><span>12-08 15:12</span><span class="sep">·</span><span>4,100 万 Token</span><span class="sep">·</span><span>6.2 MB</span></div>
+                <div class="session-preview clamp2">首屏信息密度减半，文章卡片改 12 列栅格，标题字重收敛到 600…</div>
+              </div>
+              <div class="session-item" data-ts="84" data-tokens="1900" data-size="2.8" data-open-detail>
+                <div class="session-title ellipsis">深色模式对比度修复</div>
+                <div class="session-meta"><span>codex-mini-latest</span><span class="sep">·</span><span>cli</span><span class="sep">·</span><span>12-01 21:36</span><span class="sep">·</span><span>1,900 万 Token</span><span class="sep">·</span><span>2.8 MB</span></div>
+                <div class="session-preview clamp2">正文对比度提升到 7:1，代码块底色单独调整，链接色在暗底下重新校准…</div>
+              </div>
+              <div class="session-more">仅展示最近 2 个 · 共 4 个会话</div>
+            </div>
+          </div>
+
+          <!-- ===== 未分组 ===== -->
+          <div class="collapse" data-group>
+            <div class="collapse-head" style="min-height: 40px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">未分组</span>
+              <span class="count-badge">1</span>
+              <span class="collapse-meta">~/tmp</span>
+              <span class="collapse-meta ml-auto">1,700 万 Token · 2 MB</span>
+            </div>
+            <div class="collapse-body">
+              <div class="session-item" data-ts="86" data-tokens="1700" data-size="2.1" data-open-detail>
+                <div class="session-title ellipsis">临时脚本：日志文件清洗</div>
+                <div class="session-meta"><span>gpt-5.6-terra</span><span class="sep">·</span><span>exec</span><span class="sep">·</span><span>11-30 23:14</span><span class="sep">·</span><span>1,700 万 Token</span><span class="sep">·</span><span>2.1 MB</span></div>
+                <div class="session-preview clamp2">把 ~/tmp 下的 nginx access.log 按状态码聚合统计，输出 Top 20 慢请求路径…</div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 搜索无结果 -->
+        <div class="empty" id="noResult" hidden style="padding: var(--space-10) var(--space-6);">
+          <div class="empty-icon" style="width: 64px; height: 64px;"><i data-icon="search" data-size="28"></i></div>
+          <div class="empty-title">没有匹配的会话</div>
+          <p class="empty-desc">搜索范围包含标题、首条消息与预览内容。换个关键词试试。</p>
+          <button class="btn btn-secondary" id="btnClearSearch">清除搜索</button>
+        </div>
+      </section>
+
+      <!-- ========== 会话详情视图（页内） ========== -->
+      <section id="detailView" hidden>
+        <button class="btn btn-ghost btn-sm" id="btnBack" style="margin-left: -10px;"><i data-icon="arrow-left" data-size="14"></i>返回会话列表</button>
+
+        <div class="mt8">
+          <div class="detail-title-row">
+            <span style="font-size: var(--font-size-title); font-weight: var(--font-weight-semibold);">素材库批量重命名与压缩</span>
+            <span class="tag tag-system mono">gpt-5.5</span>
+            <span class="tag tag-system">vscode</span>
+          </div>
+          <div class="s12 t3 mt4 mono">sess_01J8XK4M9Q2N7PDR6T3VBYE0ZA · 2025-12-14 21:08 创建</div>
+        </div>
+
+        <div class="section">
+          <div class="section-head"><h2 class="section-title">元数据</h2></div>
+          <div class="card">
+            <dl class="meta-grid">
+              <dt>会话 ID</dt><dd class="mono ellipsis">sess_01J8XK4M9Q2N7PDR6T3VBYE0ZA</dd>
+              <dt>工作目录</dt><dd class="mono">~/CODE/XOAssets</dd>
+              <dt>模型</dt><dd class="mono">gpt-5.5</dd>
+              <dt>来源</dt><dd class="mono">vscode</dd>
+              <dt>创建时间</dt><dd class="mono">2025-12-14 21:08:33</dd>
+              <dt>最后活跃</dt><dd class="mono">2025-12-15 00:47:12</dd>
+              <dt>Token 用量</dt><dd><span class="mono w600">241,382,004</span> <span class="s11 t3">（会话总量）</span></dd>
+              <dt>文件大小</dt><dd class="mono">38.2 MB（rollout .jsonl）</dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-head"><h2 class="section-title">Git 信息</h2></div>
+          <div class="card git-line">
+            <i data-icon="git-branch" data-size="14" class="t2"></i>
+            <span>feat/asset-rename</span>
+            <span class="t3">·</span><span class="t2">9f3c2d1</span>
+            <span class="t3">·</span><span class="t2 ellipsis">git@github.com:zreo/XOAssets.git</span>
+          </div>
+        </div>
+
+        <div class="section row-flex gap8">
+          <button class="btn btn-secondary" id="btnDownload"><i data-icon="download" data-size="14"></i>下载 rollout .jsonl</button>
+          <button class="btn btn-secondary" data-open-modal="modal-deleted"><i data-icon="trash" data-size="14"></i>最近删除</button>
+          <button class="btn btn-danger-subtle" data-open-modal="modal-delete"><i data-icon="trash" data-size="14"></i>删除</button>
+        </div>
+
+        <div class="section">
+          <div class="conversation-head">
+            <h2 class="section-title">完整对话</h2>
+            <span class="s11 t3">8 条可见消息 · 全部已加载</span>
+            <div class="search-box ml-auto" style="width: 240px;">
+              <i data-icon="search" data-size="14"></i>
+              <input class="input" id="qConversation" type="text" placeholder="搜索当前对话…">
+            </div>
+          </div>
+          <div class="conversation-stream" id="conversationStream">
+            <article class="message-row user" data-message-text="需要把 assets/raw 下 2300 个 PSD 批量导出为 WebP，并按类目重新命名。保留原始图层命名映射表，失败文件单独输出清单。">
+              <div class="message-avatar">你</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">用户</span><span>21:08:41</span></div>
+                <div class="message-text">需要把 <span class="mono">assets/raw</span> 下 2,300 个 PSD 批量导出为 WebP，并按类目重新命名。保留原始图层命名映射表，失败文件单独输出清单。</div>
+              </div>
+            </article>
+            <article class="message-row assistant" data-message-text="我先扫描目录确认文件分布、命名规律和现有脚本，再决定批处理方案。">
+              <div class="message-avatar">AI</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">助手</span><span class="phase-chip">过程更新</span><span>21:09:02</span></div>
+                <div class="message-text">我先扫描目录确认文件分布、命名规律和现有脚本，再决定批处理方案。</div>
+              </div>
+            </article>
+            <article class="message-row assistant" data-message-text="共发现 2300 个 PSD，主要分布在 banner icon product 三类目录。现有 Node 工具链已包含 sharp，但 PSD 解码需要额外处理。">
+              <div class="message-avatar">AI</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">助手</span><span class="phase-chip">过程更新</span><span>21:10:48</span></div>
+                <div class="message-text">共发现 2,300 个 PSD，主要分布在 <span class="mono">banner / icon / product</span> 三类目录。现有 Node 工具链已包含 sharp，但 PSD 解码需要额外处理。</div>
+              </div>
+            </article>
+            <article class="message-row user" data-message-text="并发不要太高，机器只有 16GB 内存。导出的 WebP 质量设为 82，保留目录层级。">
+              <div class="message-avatar">你</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">用户</span><span>21:12:16</span></div>
+                <div class="message-text">并发不要太高，机器只有 16GB 内存。导出的 WebP 质量设为 82，保留目录层级。</div>
+              </div>
+            </article>
+            <article class="message-row assistant" data-message-text="我会把并发限制为 4，单文件失败不会中断任务，并生成 manifest.json 和 failures.csv。">
+              <div class="message-avatar">AI</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">助手</span><span class="phase-chip">过程更新</span><span>21:12:29</span></div>
+                <div class="message-text">我会把并发限制为 4，单文件失败不会中断任务，并生成 <span class="mono">manifest.json</span> 和 <span class="mono">failures.csv</span>。</div>
+              </div>
+            </article>
+            <article class="message-row assistant" data-message-text="批处理脚本已经完成。实际转换 2287 个文件，13 个失败；输出目录和映射表已生成。">
+              <div class="message-avatar">AI</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">助手</span><span class="phase-chip final">最终回答</span><span>23:46:08</span></div>
+                <div class="message-text">批处理脚本已经完成。实际转换 2,287 个文件，13 个失败；输出目录和映射表已生成。失败项已写入 <span class="mono">failures.csv</span>。</div>
+              </div>
+            </article>
+            <article class="message-row user" data-message-text="把失败的 13 个文件原因按类型汇总一下。">
+              <div class="message-avatar">你</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">用户</span><span>23:47:31</span></div>
+                <div class="message-text">把失败的 13 个文件原因按类型汇总一下。</div>
+              </div>
+            </article>
+            <article class="message-row assistant" data-message-text="13 个失败文件分为三类：图层损坏 7 个，色彩空间不支持 4 个，文件读取权限问题 2 个。">
+              <div class="message-avatar">AI</div>
+              <div class="message-main">
+                <div class="message-meta"><span class="message-role">助手</span><span class="phase-chip final">最终回答</span><span>23:48:02</span></div>
+                <div class="message-text">13 个失败文件分为三类：图层损坏 7 个、色彩空间不支持 4 个、文件读取权限问题 2 个。清单已按原因重新排序。</div>
+              </div>
+            </article>
+            <div class="empty" id="conversationNoResult" hidden style="padding: var(--space-8) 0;">
+              <div class="empty-title">当前对话没有匹配内容</div>
+              <p class="empty-desc">换一个关键词搜索用户或助手消息。</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 骨架屏 ========== -->
+      <section data-view="loading" hidden>
+        <div class="row-flex gap8" style="margin-bottom: var(--space-4);">
+          <div class="sk" style="width: 360px; height: 32px; border-radius: var(--radius-sm);"></div>
+          <div class="sk" style="width: 140px; height: 32px; border-radius: var(--radius-sm);"></div>
+        </div>
+        <div style="display: grid; gap: var(--space-3);">
+          <div class="sk" style="height: 40px; border-radius: var(--radius-md);"></div>
+          <div class="card" style="padding: 0;">
+            <div style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-divider);"><div class="sk sk-text" style="width: 45%;"></div><div class="sk sk-text mt8" style="width: 70%;"></div><div class="sk sk-text mt8" style="width: 90%;"></div></div>
+            <div style="padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-divider);"><div class="sk sk-text" style="width: 40%;"></div><div class="sk sk-text mt8" style="width: 65%;"></div><div class="sk sk-text mt8" style="width: 85%;"></div></div>
+            <div style="padding: var(--space-3) var(--space-4);"><div class="sk sk-text" style="width: 50%;"></div><div class="sk sk-text mt8" style="width: 60%;"></div><div class="sk sk-text mt8" style="width: 80%;"></div></div>
+          </div>
+          <div class="sk" style="height: 40px; border-radius: var(--radius-md);"></div>
+          <div class="sk" style="height: 40px; border-radius: var(--radius-md);"></div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 空数据 ========== -->
+      <section data-view="empty" hidden>
+        <div class="empty">
+          <div class="empty-icon"><i data-icon="chat" data-size="40"></i></div>
+          <div class="empty-title">还没有会话记录</div>
+          <p class="empty-desc">Codex 的每次对话都会保存为 rollout 文件。开始一个会话后，这里会按项目分组展示全部记录。</p>
+          <button class="btn btn-secondary" id="btnWhere"><i data-icon="folder" data-size="14"></i>了解会话存储位置</button>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 错误 ========== -->
+      <section data-view="error" hidden>
+        <div class="empty is-error">
+          <div class="empty-icon"><i data-icon="alert" data-size="40"></i></div>
+          <div class="empty-title">会话索引读取失败</div>
+          <p class="empty-desc">本地索引数据库被占用。请关闭正在运行的 Codex 会话后重试。</p>
+          <div class="path-block">~/.codex/state_5.sqlite · SQLITE_BUSY: database is locked</div>
+          <button class="btn btn-primary" id="btnRetrySessions"><i data-icon="refresh" data-size="14"></i>重试</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<!-- ===== 删除会话确认弹窗 ===== -->
+<div class="modal-overlay" id="modal-delete">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-title"><span class="danger-ic"><i data-icon="alert" data-size="16"></i></span>删除会话？</div>
+    <div class="modal-body">
+      <p>会话「<b>素材库批量重命名与压缩</b>」将从 Codex 会话列表删除：</p>
+      <div class="path-block mt8">rollout-2025-12-14T21-08-33-sess_01J8…0ZA.jsonl · 38.2 MB</div>
+      <div class="card mt12" style="padding: var(--space-3);">
+        <div class="s12">将处理 <b class="mono">1</b> 条 thread 索引、<b class="mono">4</b> 条动态工具记录和 <b class="mono">2</b> 条 Subagent 关联。</div>
+      </div>
+      <div class="callout callout-danger mt12"><i data-icon="alert" data-size="14"></i>请先确认该会话已停止运行。删除后会进入 Codex-O「最近删除」，保留 7 天，可恢复。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" data-close-modal data-autofocus>取消</button>
+      <button class="btn btn-danger" id="btnConfirmDelete"><i data-icon="trash" data-size="14"></i>确认删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 最近删除 ===== -->
+<div class="modal-overlay" id="modal-deleted">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-title"><i data-icon="trash" data-size="16"></i>最近删除</div>
+    <div class="modal-body">
+      <div class="deleted-session">
+        <div style="min-width: 0; flex: 1;">
+          <div class="w600">重构上传分片与断点续传</div>
+          <div class="s11 t3 mt4"><span class="mono">12.6 MB</span> · 2 天前删除 · 还可恢复 5 天</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="btnRestoreDeleted"><i data-icon="refresh" data-size="14"></i>恢复</button>
+      </div>
+      <div class="callout callout-info mt12"><i data-icon="info" data-size="14"></i>超过保留期后才会永久清理 rollout 和备份索引。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" data-close-modal data-autofocus>关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== 会话页交互 ===== */
+(function () {
+  var listView = document.getElementById('listView');
+  var detailView = document.getElementById('detailView');
+
+  /* --- 详情视图开关 --- */
+  function openDetail() {
+    document.querySelectorAll('.content > section').forEach(function (s) { s.hidden = true; });
+    detailView.hidden = false;
+    document.querySelector('.content').scrollTop = 0;
+  }
+  function closeDetail() {
+    detailView.hidden = true;
+    var active = document.querySelector('.proto-btn[data-view-btn].active');
+    window.ProtoSetView(active ? active.getAttribute('data-view-btn') : 'normal');
+  }
+  document.querySelectorAll('[data-open-detail]').forEach(function (item) {
+    item.addEventListener('click', openDetail);
+  });
+  document.getElementById('btnBack').addEventListener('click', closeDetail);
+  if (location.hash === '#detail') openDetail();
+
+  /* --- 搜索（高亮关键词） --- */
+  var q = document.getElementById('q');
+  var items = Array.prototype.slice.call(document.querySelectorAll('.session-item'));
+  var originals = items.map(function (it) {
+    return {
+      title: it.querySelector('.session-title').textContent,
+      preview: it.querySelector('.session-preview').textContent
+    };
+  });
+  var noResult = document.getElementById('noResult');
+  var matchCount = document.getElementById('matchCount');
+
+  function highlight(el, text, kw) {
+    if (!kw) { el.textContent = text; return; }
+    var i = text.toLowerCase().indexOf(kw.toLowerCase());
+    if (i === -1) { el.textContent = text; return; }
+    el.innerHTML = '';
+    el.appendChild(document.createTextNode(text.slice(0, i)));
+    var m = document.createElement('mark');
+    m.textContent = text.slice(i, i + kw.length);
+    el.appendChild(m);
+    el.appendChild(document.createTextNode(text.slice(i + kw.length)));
+  }
+
+  q.addEventListener('input', function () {
+    var kw = q.value.trim();
+    var visible = 0;
+    items.forEach(function (it, idx) {
+      var hay = (originals[idx].title + ' ' + originals[idx].preview).toLowerCase();
+      var ok = !kw || hay.indexOf(kw.toLowerCase()) > -1;
+      it.hidden = !ok;
+      if (ok) {
+        visible++;
+        highlight(it.querySelector('.session-title'), originals[idx].title, kw);
+        highlight(it.querySelector('.session-preview'), originals[idx].preview, kw);
+      }
+    });
+    /* 隐藏无匹配分组 */
+    document.querySelectorAll('[data-group]').forEach(function (g) {
+      var any = Array.prototype.some.call(g.querySelectorAll('.session-item'), function (it) { return !it.hidden; });
+      g.style.display = (kw && !any) ? 'none' : '';
+      if (kw && any) g.classList.add('open');
+    });
+    noResult.hidden = visible !== 0;
+    document.getElementById('groupWrap').style.display = visible === 0 ? 'none' : '';
+    matchCount.textContent = kw ? ('匹配 ' + visible + ' 条') : '6 个项目 · 54 个会话';
+  });
+  document.getElementById('btnClearSearch').addEventListener('click', function () {
+    q.value = ''; q.dispatchEvent(new Event('input')); q.focus();
+  });
+
+  /* --- 当前会话完整对话搜索 --- */
+  var qConversation = document.getElementById('qConversation');
+  var conversationRows = Array.prototype.slice.call(document.querySelectorAll('#conversationStream .message-row'));
+  var conversationNoResult = document.getElementById('conversationNoResult');
+  qConversation.addEventListener('input', function () {
+    var kw = qConversation.value.trim().toLowerCase();
+    var visible = 0;
+    conversationRows.forEach(function (row) {
+      var ok = !kw || row.getAttribute('data-message-text').toLowerCase().indexOf(kw) > -1;
+      row.hidden = !ok;
+      if (ok) visible++;
+    });
+    conversationNoResult.hidden = visible !== 0;
+  });
+
+  /* --- 排序（组内重排） --- */
+  document.getElementById('fSort').addEventListener('change', function () {
+    var key = this.value;
+    document.querySelectorAll('[data-group] .collapse-body').forEach(function (body) {
+      var its = Array.prototype.slice.call(body.querySelectorAll('.session-item'));
+      its.sort(function (a, b) {
+        return parseFloat(b.getAttribute('data-' + key)) - parseFloat(a.getAttribute('data-' + key));
+      });
+      var more = body.querySelector('.session-more');
+      its.forEach(function (it) { body.insertBefore(it, more); });
+    });
+  });
+
+  /* --- 操作反馈 --- */
+  document.getElementById('btnExportCsv').addEventListener('click', function () {
+    window.showToast({ type: 'success', title: '已导出 sessions.csv', desc: '54 条会话索引 · 12 KB' });
+  });
+  document.getElementById('btnExportJson').addEventListener('click', function () {
+    window.showToast({ type: 'success', title: '已导出 sessions.json', desc: '54 条会话索引 · 48 KB' });
+  });
+  document.getElementById('btnDownload').addEventListener('click', function () {
+    window.showToast({ type: 'success', title: '已导出 rollout 文件', desc: 'sess_01J8…0ZA.jsonl · 38.2 MB' });
+  });
+  document.getElementById('btnConfirmDelete').addEventListener('click', function () {
+    window.ProtoCloseModal('modal-delete');
+    closeDetail();
+    window.showToast({ type: 'success', title: '已删除会话', desc: '已移入最近删除 · 7 天内可恢复' });
+  });
+  document.getElementById('btnRestoreDeleted').addEventListener('click', function () {
+    window.ProtoCloseModal('modal-deleted');
+    window.showToast({ type: 'success', title: '会话已恢复', desc: 'rollout 文件与会话索引已恢复' });
+  });
+  document.getElementById('btnWhere').addEventListener('click', function () {
+    window.showToast({ type: 'info', title: '会话存储位置', desc: '~/.codex/projects/<项目路径>/sessions/ 下的 .jsonl 文件' });
+  });
+
+  /* --- PROTO 演示动作 --- */
+  window.PROTO_ACTIONS = {
+    openDetail: openDetail,
+    delModal: function () { openDetail(); window.ProtoOpenModal('modal-delete'); },
+    deletedModal: function () { openDetail(); window.ProtoOpenModal('modal-deleted'); }
+  };
+})();
+</script>
+</body>
+</html>

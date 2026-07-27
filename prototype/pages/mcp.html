@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<!-- 页面: MCP 管理 | 对应 PRD: P2-01 | 优先级: P2（占位级 · v1.x 后续）
+     覆盖: Server 列表(名称/命令/参数/环境变量/启用开关) / 增删改基础表单弹窗
+     备注: 本页为占位原型，仅表达信息架构，不投入精细设计 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP 管理 · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<script>
+  window.PROTO = {
+    name: 'MCP 管理 · P2-01（占位）',
+    states: ['normal'],
+    aiStates: true,
+    actions: [{ id: 'addServer', label: '添加 Server 弹窗' }]
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item active" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>MCP 管理</h1>
+      <span class="tag tag-p2">P2 · v1.x 后续</span>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，Skill 解析展示英文原文</span>
+        <span class="ai-text-down">AI 服务不可用，Skill 解析已回退为英文原文</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+      <div class="container-narrow">
+
+      <section data-view="normal">
+        <div class="callout callout-info" style="margin-bottom: var(--space-4);">
+          <i data-icon="info" data-size="14"></i>
+          <div><b>占位原型</b>：MCP 管理属于 v1.x 后续能力。本页仅表达信息架构（列表 + 基础增删改），视觉与交互细节不在当前里程碑范围。</div>
+        </div>
+
+        <div class="section-head">
+          <h2 class="section-title">MCP Servers</h2>
+          <span class="count-badge">3</span>
+          <button class="btn btn-primary btn-sm ml-auto" data-open-modal="modal-add"><i data-icon="plus" data-size="14"></i>添加 Server</button>
+        </div>
+
+        <div class="rows">
+          <div class="row-head">
+            <span style="width: 160px;">名称</span>
+            <span style="flex: 1;">启动命令</span>
+            <span style="width: 160px;">环境变量</span>
+            <span style="width: 48px; text-align: right;">启用</span>
+          </div>
+          <div class="row hover">
+            <span class="w600 s12" style="width: 160px;">tencent-docs</span>
+            <span class="mono s12 t2 ellipsis" style="flex: 1;">npx -y @tencent/docs-mcp@latest</span>
+            <span class="mono s11 t3 ellipsis" style="width: 160px;">DOCS_TOKEN=•••</span>
+            <span style="width: 48px; display: flex; justify-content: flex-end;"><button class="switch on" data-switch aria-label="启用开关"></button></span>
+          </div>
+          <div class="row hover">
+            <span class="w600 s12" style="width: 160px;">chrome-devtools</span>
+            <span class="mono s12 t2 ellipsis" style="flex: 1;">npx chrome-devtools-mcp --headless</span>
+            <span class="mono s11 t3 ellipsis" style="width: 160px;">—</span>
+            <span style="width: 48px; display: flex; justify-content: flex-end;"><button class="switch on" data-switch aria-label="启用开关"></button></span>
+          </div>
+          <div class="row hover">
+            <span class="w600 s12" style="width: 160px;">filesystem</span>
+            <span class="mono s12 t2 ellipsis" style="flex: 1;">uvx mcp-server-filesystem ~/CODE</span>
+            <span class="mono s11 t3 ellipsis" style="width: 160px;">—</span>
+            <span style="width: 48px; display: flex; justify-content: flex-end;"><button class="switch" data-switch aria-label="启用开关"></button></span>
+          </div>
+        </div>
+
+        <p class="s11 t3 mt12">配置文件：<span class="mono">~/.codex/config.toml</span> · 修改后需重启 Codex 会话生效。编辑、删除等操作将在 v1.x 后续里程碑完整提供。</p>
+      </section>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 添加 Server 弹窗（基础表单） ===== -->
+<div class="modal-overlay" id="modal-add">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-title">添加 MCP Server</div>
+    <div class="modal-body">
+      <div class="field">
+        <label class="field-label">名称</label>
+        <input class="input" placeholder="如：tencent-docs">
+      </div>
+      <div class="field">
+        <label class="field-label">启动命令</label>
+        <input class="input mono" placeholder="npx -y some-mcp-server">
+      </div>
+      <div class="field">
+        <label class="field-label">参数</label>
+        <input class="input mono" placeholder="--port 8080（可选）">
+      </div>
+      <div class="field" style="margin-bottom: 0;">
+        <label class="field-label">环境变量</label>
+        <textarea class="input mono" rows="3" placeholder="KEY=VALUE（每行一个，可选）"></textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" data-close-modal data-autofocus>取消</button>
+      <button class="btn btn-primary" id="btnAddServer">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== MCP 页交互（占位级） ===== */
+(function () {
+  document.querySelectorAll('[data-switch]').forEach(function (sw) {
+    sw.addEventListener('click', function () {
+      sw.classList.toggle('on');
+      window.showToast({
+        type: 'info',
+        title: sw.classList.contains('on') ? '已启用 Server' : '已停用 Server',
+        desc: '重启 Codex 会话后生效'
+      });
+    });
+  });
+  document.getElementById('btnAddServer').addEventListener('click', function () {
+    window.ProtoCloseModal('modal-add');
+    window.showToast({ type: 'success', title: '已保存 MCP Server', desc: '重启 Codex 会话后生效（占位演示）' });
+  });
+  window.PROTO_ACTIONS = {
+    addServer: function () { window.ProtoOpenModal('modal-add'); }
+  };
+})();
+</script>
+</body>
+</html>

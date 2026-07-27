@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<!-- 页面: Skill 详情 | 对应 PRD: P0-02 | 优先级: P0
+     示例对象: frontend-design（GitHub 来源 / v1.2.0 / 可更新 / 含 4 个附属文件）
+     覆盖: AI 中文三要素区块(正常+降级双态) / 相似推荐+并排对比 / 元数据+附属文件
+           原始英文 Description 折叠 / SKILL.md 原文折叠 / 卸载二次确认弹窗(默认焦点取消)
+     备注: 系统 Skill 详情与此同构，但「卸载」按钮为禁用态（见列表页系统分区） -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>frontend-design · Skill 详情 · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<style>
+  /* AI 解析区：正常中文态 / 降级原文态 互斥显示 */
+  .ai-block-en { display: none; }
+  body.ai-degraded .ai-block-en, body.ai-down .ai-block-en { display: block; }
+  body.ai-degraded .ai-block-cn, body.ai-down .ai-block-cn { display: none; }
+  .detail-head { display: flex; align-items: flex-start; gap: var(--space-3); }
+  .detail-icon { width: 44px; height: 44px; font-size: 17px; }
+  .detail-title { font-size: var(--font-size-title); font-weight: var(--font-weight-semibold); line-height: var(--line-height-tight); }
+  .detail-sub { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-top: 6px; }
+  .detail-path { display: flex; align-items: center; gap: 6px; margin-top: var(--space-2); font-family: var(--font-mono); font-size: var(--font-size-micro); color: var(--color-text-tertiary); }
+  .detail-path button { color: var(--color-text-tertiary); display: flex; padding: 2px; }
+  .detail-path button:hover { color: var(--color-primary-text); }
+  .similar-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
+  .similar-card { display: flex; gap: 10px; align-items: flex-start; padding: var(--space-3); }
+  .similar-card .skill-icon { width: 28px; height: 28px; font-size: var(--font-size-small); }
+  .fold-head { width: 100%; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3) var(--space-4); text-align: left; font-size: var(--font-size-h3); font-weight: var(--font-weight-semibold); }
+  .fold-head .s11 { font-weight: var(--font-weight-regular); }
+  .header-disabled-note { display: none; margin-top: var(--space-2); }
+  body.skill-off .header-disabled-note { display: flex; }
+  body.skill-off .detail-icon { background: var(--color-chip-neutral); color: var(--color-text-tertiary); }
+</style>
+<script>
+  window.PROTO = {
+    name: 'Skill 详情 · P0-02',
+    states: ['normal', 'loading', 'error'],
+    aiStates: true,
+    actions: [{ id: 'uninstall', label: '卸载确认弹窗' }, { id: 'reparse', label: '重新解析演示' }]
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item active" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>Skill 详情</h1>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，Skill 解析展示英文原文</span>
+        <span class="ai-text-down">AI 服务不可用，Skill 解析已回退为英文原文</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+      <div class="container-narrow">
+
+      <!-- ========== 视图: 正常 ========== -->
+      <section data-view="normal">
+        <a class="btn btn-ghost btn-sm" href="skill-list.html" style="margin-left: -10px;"><i data-icon="arrow-left" data-size="14"></i>返回列表</a>
+
+        <!-- 头部 -->
+        <div class="detail-head mt8">
+          <span class="skill-icon detail-icon">F</span>
+          <div style="flex: 1; min-width: 0;">
+            <div class="row-flex gap8">
+              <span class="detail-title mono">frontend-design</span>
+              <span class="pill pill-info"><span class="dot info"></span>可更新 <span class="mono">v1.3.0</span></span>
+              <span class="pill pill-neutral" id="offPill" hidden><span class="dot off"></span>已禁用</span>
+            </div>
+            <div class="detail-sub">
+              <span class="tag tag-system"><i data-icon="github" data-size="12"></i>GitHub</span>
+              <span class="mono s12 t2">v1.2.0</span>
+              <span class="s12 t3">·</span>
+              <span class="s12 t3">安装于 2025-11-02</span>
+              <span class="s12 t3">·</span>
+              <a class="s12" href="updates.html">去更新 →</a>
+            </div>
+            <div class="detail-path">
+              <i data-icon="folder" data-size="12"></i>~/.codex/skills/frontend-design/
+              <button title="复制路径" id="btnCopyPath"><i data-icon="copy" data-size="12"></i></button>
+            </div>
+            <div class="callout callout-warning header-disabled-note"><i data-icon="ban" data-size="14"></i>已禁用：会话中不会再加载此 Skill，随时可重新启用。</div>
+          </div>
+          <div class="row-flex gap8" style="flex-shrink: 0;">
+            <button class="btn btn-secondary" id="btnToggleOff"><i data-icon="ban" data-size="14"></i><span id="btnOffText">禁用</span></button>
+            <button class="btn btn-danger-subtle" data-open-modal="modal-uninstall"><i data-icon="trash" data-size="14"></i>卸载</button>
+          </div>
+        </div>
+
+        <!-- AI 中文解析区（正常态） -->
+        <div class="section">
+          <div class="ai-block ai-block-cn">
+            <div class="ai-block-head">
+              <span class="ai-label"><i data-icon="sparkles" data-size="16"></i>AI 中文解析</span>
+              <span class="ai-model">gpt-4o-mini · 3 天前解析</span>
+              <button class="btn btn-ghost btn-sm ml-auto" id="btnReparse"><i data-icon="refresh" data-size="12"></i>重新解析</button>
+            </div>
+            <div class="ai-part">
+              <div class="ai-key">作用</div>
+              <p class="ai-body">让 AI 生成高质量前端界面代码，注重设计审美与工程质量的平衡：产出语义化、可访问、可维护的组件与页面，而不是「能跑就行」的草稿。</p>
+            </div>
+            <div class="ai-part">
+              <div class="ai-key">使用场景</div>
+              <ul class="ai-scenes">
+                <li>当用户要求创建网页组件或完整页面时</li>
+                <li>当用户需要提升现有界面的设计质量时</li>
+                <li>当用户指定使用 Tailwind CSS 或现代 CSS 技术栈时</li>
+                <li>当用户要求审查界面代码的可用性与视觉层级时</li>
+              </ul>
+            </div>
+            <div class="ai-part">
+              <div class="ai-key">使用方式</div>
+              <div class="ai-usage">自然语言触发，无需特殊命令。直接描述需求，如「帮我设计一个登录页面」「把这个表格改成卡片布局」。前置依赖：项目已安装 Tailwind CSS 3.x。</div>
+            </div>
+          </div>
+
+          <!-- AI 降级态（展示英文原文） -->
+          <div class="ai-block degraded ai-block-en">
+            <div class="ai-block-head">
+              <span class="ai-label"><i data-icon="alert" data-size="16"></i>AI 降级 · 展示原文</span>
+              <span class="ai-model">解析失败：HTTP 429 · 已回退</span>
+              <button class="btn btn-secondary btn-sm ml-auto" data-ai-retry><i data-icon="refresh" data-size="12"></i>重试解析</button>
+            </div>
+            <p class="ai-original">Generate high-quality frontend interface code with a balance of design aesthetics and engineering quality. Triggers naturally when users ask to create web components or pages, improve existing UI quality, or work with Tailwind CSS / modern CSS stacks. Requires Tailwind CSS 3.x in the project. No special commands needed — describe the requirement in natural language.</p>
+          </div>
+        </div>
+
+        <!-- 相似 Skill 推荐 -->
+        <div class="section">
+          <div class="section-head">
+            <h2 class="section-title">你可能也想看</h2>
+            <span class="section-note">功能相近 · 点开可并排对比</span>
+            <div class="segmented ml-auto" data-segmented>
+              <button class="active" data-seg="cards">卡片</button>
+              <button data-seg="compare">并排对比</button>
+            </div>
+          </div>
+
+          <div class="similar-grid" id="similarCards">
+            <a class="card clickable similar-card" href="skill-detail.html">
+              <span class="skill-icon">U</span>
+              <div style="min-width: 0;">
+                <div class="skill-name">ui-ux-pro-max</div>
+                <div class="s12 t2 clamp2 mt4" style="margin-top: 2px;">资深 UI/UX 专家视角，审查并重构界面的可用性与视觉层级</div>
+              </div>
+            </a>
+            <a class="card clickable similar-card" href="skill-detail.html">
+              <span class="skill-icon">W</span>
+              <div style="min-width: 0;">
+                <div class="skill-name">web-animation-design</div>
+                <div class="s12 t2 clamp2" style="margin-top: 2px;">为网页与组件设计流畅动效，输出 CSS 与 Web Animations 实现</div>
+              </div>
+            </a>
+            <a class="card clickable similar-card" href="skill-detail.html">
+              <span class="skill-icon">I</span>
+              <div style="min-width: 0;">
+                <div class="skill-name">impeccable</div>
+                <div class="s12 t2 clamp2" style="margin-top: 2px;">界面反 slop 审查清单，逐条排查 AI 生成页面的设计债</div>
+              </div>
+            </a>
+          </div>
+
+          <!-- 并排对比三要素 -->
+          <div class="compare-grid" id="similarCompare" hidden>
+            <div class="compare-card current">
+              <div class="skill-name mono s12">frontend-design</div>
+              <div class="compare-key">作用</div>
+              <div class="compare-val">生成高质量前端界面代码，兼顾审美与工程质量</div>
+              <div class="compare-key">场景</div>
+              <div class="compare-val">创建页面 / 提升设计质量 / 界面审查</div>
+              <div class="compare-key">方式</div>
+              <div class="compare-val">自然语言触发，依赖 Tailwind 3.x</div>
+            </div>
+            <div class="compare-card">
+              <div class="skill-name mono s12">ui-ux-pro-max</div>
+              <div class="compare-key">作用</div>
+              <div class="compare-val">以专家 persona 审查并重构界面可用性</div>
+              <div class="compare-key">场景</div>
+              <div class="compare-val">设计走查 / 改版建议 / 可用性问题</div>
+              <div class="compare-key">方式</div>
+              <div class="compare-val">自然语言触发，无依赖</div>
+            </div>
+            <div class="compare-card">
+              <div class="skill-name mono s12">web-animation-design</div>
+              <div class="compare-key">作用</div>
+              <div class="compare-val">设计网页动效并输出 CSS/WAAPI 实现</div>
+              <div class="compare-key">场景</div>
+              <div class="compare-val">交互动效 / 微交互 / 页面过渡</div>
+              <div class="compare-key">方式</div>
+              <div class="compare-val">自然语言触发，无依赖</div>
+            </div>
+            <div class="compare-card">
+              <div class="skill-name mono s12">impeccable</div>
+              <div class="compare-key">作用</div>
+              <div class="compare-val">按反 slop 清单审查 AI 生成的页面</div>
+              <div class="compare-key">场景</div>
+              <div class="compare-val">设计债排查 / 交付前质量检查</div>
+              <div class="compare-key">方式</div>
+              <div class="compare-val">自然语言触发，无依赖</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 元数据区 -->
+        <div class="section">
+          <div class="section-head"><h2 class="section-title">元数据</h2></div>
+          <div class="card">
+            <dl class="meta-grid">
+              <dt>安装时间</dt><dd class="mono">2025-11-02 14:32</dd>
+              <dt>来源</dt><dd><span class="row-flex gap4"><i data-icon="github" data-size="12"></i><span class="mono">vercel-labs/skills-frontend-design</span><i data-icon="external" data-size="11" class="t3"></i></span></dd>
+              <dt>版本</dt><dd><span class="mono">v1.2.0</span> <span class="s11 t3">（最新 v1.3.0 · 3 天前发布）</span></dd>
+              <dt>文件大小</dt><dd class="mono">12.4 KB（SKILL.md 5.1 KB + 附属 7.3 KB）</dd>
+              <dt>语言</dt><dd>英文原文 <span class="s11 t3">（已由 AI 解析为中文）</span></dd>
+              <dt>附属文件</dt>
+              <dd>
+                <ul class="file-list">
+                  <li><i data-icon="file-text" data-size="12"></i>references/design-principles.md<span class="sz">2.8 KB</span></li>
+                  <li><i data-icon="file-text" data-size="12"></i>references/tailwind-patterns.md<span class="sz">2.6 KB</span></li>
+                  <li><i data-icon="file" data-size="12"></i>scripts/scaffold.mjs<span class="sz">1.2 KB</span></li>
+                  <li><i data-icon="file-text" data-size="12"></i>agents/visual-reviewer.md<span class="sz">0.7 KB</span></li>
+                </ul>
+              </dd>
+            </dl>
+          </div>
+        </div>
+
+        <!-- 原始英文 Description（折叠） -->
+        <div class="section">
+          <div class="collapse">
+            <div class="collapse-head" style="min-height: 44px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title" style="font-size: var(--font-size-h3);">原始英文 Description</span>
+              <span class="s11 t3">SKILL.md frontmatter · 301 字符</span>
+            </div>
+            <div class="collapse-body" style="padding: var(--space-4); padding-top: var(--space-3);">
+              <p class="s12 t2" style="line-height: var(--line-height-body);">Generate high-quality frontend interface code with a balance of design aesthetics and engineering quality. Use when users ask to create web components or full pages, improve the design quality of existing interfaces, work within Tailwind CSS or modern CSS stacks, or review UI code for usability and visual hierarchy issues. Emphasizes semantic HTML, accessibility, and maintainable patterns over quick drafts. Requires Tailwind CSS 3.x present in the project.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- SKILL.md 原文预览（折叠） -->
+        <div class="section">
+          <div class="collapse">
+            <div class="collapse-head" style="min-height: 44px;">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title" style="font-size: var(--font-size-h3);">SKILL.md 原文预览</span>
+              <span class="s11 t3">只读 · 5.1 KB</span>
+            </div>
+            <div class="collapse-body" style="padding: var(--space-4); padding-top: var(--space-3);">
+              <pre class="code">---
+name: frontend-design
+description: Generate high-quality frontend interface code with a balance
+  of design aesthetics and engineering quality. Use when users ask to
+  create web components or full pages, improve existing UI quality, or
+  review interfaces for usability and visual hierarchy issues.
+version: 1.2.0
+requires: [tailwindcss ^3.0]
+---
+
+# Frontend Design
+
+## Principles
+- Semantic HTML first; ARIA only when semantics fall short
+- One primary action per view; hierarchy via grayscale and weight
+- Spacing on an 4px grid; measure twice, pad once
+
+## Workflow
+1. Read the existing design tokens / CSS variables before writing
+2. Produce the smallest complete component that satisfies the brief
+3. Audit with references/design-principles.md before final answer
+…</pre>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ========== 视图: 骨架屏 ========== -->
+      <section data-view="loading" hidden>
+        <div class="sk" style="width: 90px; height: 28px; border-radius: var(--radius-sm);"></div>
+        <div class="row-flex gap12 mt16">
+          <div class="sk" style="width: 44px; height: 44px; border-radius: var(--radius-md);"></div>
+          <div style="flex: 1;">
+            <div class="sk sk-text" style="width: 220px; height: 16px;"></div>
+            <div class="sk sk-text mt8" style="width: 340px;"></div>
+            <div class="sk sk-text mt8" style="width: 260px;"></div>
+          </div>
+          <div class="sk" style="width: 72px; height: 32px; border-radius: var(--radius-sm);"></div>
+          <div class="sk" style="width: 72px; height: 32px; border-radius: var(--radius-sm);"></div>
+        </div>
+        <div class="sk section" style="height: 220px; border-radius: var(--radius-md);"></div>
+        <div class="sk section" style="height: 96px; border-radius: var(--radius-md);"></div>
+        <div class="sk section" style="height: 180px; border-radius: var(--radius-md);"></div>
+      </section>
+
+      <!-- ========== 视图: 错误 ========== -->
+      <section data-view="error" hidden>
+        <div class="empty is-error">
+          <div class="empty-icon"><i data-icon="alert" data-size="40"></i></div>
+          <div class="empty-title">Skill 读取失败</div>
+          <p class="empty-desc">SKILL.md 不存在或已被移动。该 Skill 可能已被手动删除，请重新扫描目录。</p>
+          <div class="path-block">~/.codex/skills/frontend-design/SKILL.md · ENOENT: no such file or directory</div>
+          <div class="row-flex gap8">
+            <a class="btn btn-primary" href="skill-list.html"><i data-icon="refresh" data-size="14"></i>返回列表并重新扫描</a>
+          </div>
+        </div>
+      </section>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ===== 卸载二次确认弹窗（危险范式：警示图标 + 路径清单 + 默认焦点取消） ===== -->
+<div class="modal-overlay" id="modal-uninstall">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="uninstallTitle">
+    <div class="modal-title" id="uninstallTitle">
+      <span class="danger-ic"><i data-icon="alert" data-size="16"></i></span>
+      卸载 <span class="mono">frontend-design</span>？
+    </div>
+    <div class="modal-body">
+      <p>将从磁盘永久删除以下目录：</p>
+      <div class="path-block mt8">~/.codex/skills/frontend-design/</div>
+      <p class="mt12">将同时删除以下 <b class="mono">4</b> 个附属文件：</p>
+      <ul class="file-list mt8">
+        <li><i data-icon="file-text" data-size="12"></i>references/design-principles.md<span class="sz">2.8 KB</span></li>
+        <li><i data-icon="file-text" data-size="12"></i>references/tailwind-patterns.md<span class="sz">2.6 KB</span></li>
+        <li><i data-icon="file" data-size="12"></i>scripts/scaffold.mjs<span class="sz">1.2 KB</span></li>
+        <li><i data-icon="file-text" data-size="12"></i>agents/visual-reviewer.md<span class="sz">0.7 KB</span></li>
+      </ul>
+      <div class="callout callout-danger mt12"><i data-icon="alert" data-size="14"></i>此操作不可撤销。卸载后需重新安装才能恢复，AI 解析缓存将一并清除。</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" data-close-modal data-autofocus>取消</button>
+      <button class="btn btn-danger" id="btnConfirmUninstall"><i data-icon="trash" data-size="14"></i>确认卸载</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== 详情页交互 ===== */
+(function () {
+  /* 卸载确认 → Toast + 返回列表提示 */
+  document.getElementById('btnConfirmUninstall').addEventListener('click', function () {
+    window.ProtoCloseModal('modal-uninstall');
+    window.showToast({ type: 'success', title: '已卸载 frontend-design', desc: '目录与 4 个附属文件已删除，共释放 12.4 KB' });
+  });
+
+  /* 禁用 / 启用切换 */
+  var off = false;
+  document.getElementById('btnToggleOff').addEventListener('click', function () {
+    off = !off;
+    document.body.classList.toggle('skill-off', off);
+    document.getElementById('offPill').hidden = !off;
+    document.getElementById('btnOffText').textContent = off ? '启用' : '禁用';
+    window.showToast({
+      type: off ? 'warning' : 'success',
+      title: off ? '已禁用 frontend-design' : '已启用 frontend-design',
+      desc: off ? '新会话将不再加载此 Skill' : '新会话将恢复加载此 Skill'
+    });
+  });
+
+  /* 重新解析 */
+  function reparse() {
+    var btn = document.getElementById('btnReparse');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>解析中…';
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.innerHTML = '';
+      var i = document.createElement('i');
+      i.setAttribute('data-icon', 'refresh'); i.setAttribute('data-size', '12');
+      btn.appendChild(i); btn.appendChild(document.createTextNode('重新解析'));
+      window.ProtoIcons(btn);
+      window.showToast({ type: 'success', title: '已重新解析', desc: 'AI 三要素已更新 · gpt-4o-mini · 耗时 2.1s' });
+    }, 1400);
+  }
+  document.getElementById('btnReparse').addEventListener('click', reparse);
+
+  /* 复制路径 */
+  document.getElementById('btnCopyPath').addEventListener('click', function () {
+    window.showToast({ type: 'info', title: '路径已复制', desc: '~/.codex/skills/frontend-design/' });
+  });
+
+  /* 相似推荐：卡片 / 并排对比切换 */
+  document.addEventListener('segment:change', function (e) {
+    var compare = e.detail.value === 'compare';
+    document.getElementById('similarCards').hidden = compare;
+    document.getElementById('similarCompare').hidden = !compare;
+  });
+
+  /* PROTO 演示动作 */
+  window.PROTO_ACTIONS = {
+    uninstall: function () { window.ProtoOpenModal('modal-uninstall'); },
+    reparse: reparse
+  };
+})();
+</script>
+</body>
+</html>

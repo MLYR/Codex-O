@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<!-- 页面: Token 统计 | 对应 PRD: P1-04 | 优先级: P1
+     覆盖: 5 统计卡 / 维度切换分布条形图(项目·模型·来源·时间) / 日周月趋势折线(纯手写 SVG+CSS, 无外部库)
+           Top N 高消耗排行(点击→会话详情) / 费用估算卡(显著标注仅供参考) / 导出 / 骨架屏 / 空态 / 错误态 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token 统计 · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<style>
+  .stat-2col { display: grid; grid-template-columns: 1.5fr 1fr; gap: var(--space-3); }
+  .topn .bar-label { width: 300px; }
+  .cost-line { display: flex; justify-content: space-between; gap: var(--space-3); font-family: var(--font-mono); font-size: var(--font-size-small); padding: 5px 0; font-variant-numeric: tabular-nums; }
+  .cost-line.total { border-top: 1px solid var(--color-divider); margin-top: var(--space-1); padding-top: var(--space-2); font-weight: var(--font-weight-semibold); }
+  .chart-wrap { position: relative; }
+</style>
+<script>
+  window.PROTO = {
+    name: 'Token 统计 · P1-04',
+    states: ['normal', 'loading', 'empty', 'error'],
+    aiStates: true,
+    actions: []
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item active" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>Token 统计</h1>
+      <span class="sub">数据来源：本地会话索引 · 每日自动汇总</span>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，Skill 解析展示英文原文</span>
+        <span class="ai-text-down">AI 服务不可用，Skill 解析已回退为英文原文</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+
+      <!-- ========== 视图: 正常 ========== -->
+      <section data-view="normal">
+        <!-- 5 统计卡 -->
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-label">累计 Token</div>
+            <div class="stat-value">20.27<span class="stat-unit"> 亿</span></div>
+            <div class="stat-sub"><span class="chip up">+12.4%</span><span>较上月</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">会话数</div>
+            <div class="stat-value">54<span class="stat-unit"> 个</span></div>
+            <div class="stat-sub"><span class="chip flat">本月 18 个</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">平均每会话</div>
+            <div class="stat-value">3,754<span class="stat-unit"> 万</span></div>
+            <div class="stat-sub"><span>中位数 1,120 万</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">最大单会话</div>
+            <div class="stat-value">2.41<span class="stat-unit"> 亿</span></div>
+            <div class="stat-sub"><span class="ellipsis">XOAssets · 12-14</span></div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">本月用量</div>
+            <div class="stat-value">4.82<span class="stat-unit"> 亿</span></div>
+            <div class="stat-sub"><span>日均 2,540 万</span></div>
+          </div>
+        </div>
+
+        <!-- 维度分布 -->
+        <div class="section">
+          <div class="card">
+            <div class="row-flex gap8" style="margin-bottom: var(--space-3);">
+              <h2 class="section-title">Token 分布</h2>
+              <div class="tabs ml-auto" data-tabs style="border-bottom: none;">
+                <button class="tab active" data-tab="project">按项目</button>
+                <button class="tab" data-tab="model">按模型</button>
+                <button class="tab" data-tab="source">按来源</button>
+                <button class="tab" data-tab="time">按时间</button>
+              </div>
+            </div>
+            <div id="distBars"></div>
+          </div>
+        </div>
+
+        <!-- 趋势折线（纯 SVG 手写） -->
+        <div class="section">
+          <div class="card">
+            <div class="row-flex gap8" style="margin-bottom: var(--space-3);">
+              <h2 class="section-title">Token 趋势</h2>
+              <div class="segmented ml-auto" data-segmented id="trendSeg">
+                <button class="active" data-seg="day">日</button>
+                <button data-seg="week">周</button>
+                <button data-seg="month">月</button>
+              </div>
+            </div>
+            <div class="chart-wrap">
+              <svg id="trendChart" viewBox="0 0 720 240" width="100%" height="240" role="img" aria-label="Token 用量趋势折线图"></svg>
+            </div>
+            <div class="chart-legend mt8">
+              <span class="legend-key"><i></i>Token 用量（单位：百万）</span>
+              <span class="ml-auto mono" id="trendTotal">近 14 天合计 3.80 亿</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Top N + 费用估算 -->
+        <div class="section stat-2col">
+          <div class="card topn">
+            <div class="row-flex gap8" style="margin-bottom: var(--space-3);">
+              <h2 class="section-title">高消耗会话 Top 8</h2>
+              <span class="s11 t3 ml-auto">点击跳转会话详情</span>
+            </div>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">素材库批量重命名与压缩</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 100%;"></span></span><span class="bar-value">2.41 亿</span></a>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">播放器内核迁移到 media3</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 77.2%;"></span></span><span class="bar-value">1.86 亿</span></a>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">上传链路重构：分片与断点续传</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 63.1%;"></span></span><span class="bar-value">1.52 亿</span></a>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">图片 CDN 域名切换迁移</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 40.9%;"></span></span><span class="bar-value">9,870 万</span></a>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">加密模块安全审计</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 40.7%;"></span></span><span class="bar-value">9,800 万</span></a>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">缩略图服务缓存命中率优化</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 35.9%;"></span></span><span class="bar-value">8,640 万</span></a>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">批量打水印 Worker 内存泄漏排查</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 30.8%;"></span></span><span class="bar-value">7,420 万</span></a>
+            <a class="bar-row" href="sessions.html#detail"><span class="bar-label ellipsis">弹幕渲染性能优化</span><span class="bar-track plain"><span class="bar-fill subtle" style="width: 28.6%;"></span></span><span class="bar-value">6,900 万</span></a>
+          </div>
+
+          <div class="card">
+            <div class="row-flex gap8" style="margin-bottom: var(--space-3);">
+              <h2 class="section-title">费用估算</h2>
+              <span class="pill pill-warning ml-auto"><span class="dot warn"></span>仅供参考</span>
+            </div>
+            <div class="cost-line"><span class="t2">输入（含缓存）11.4 亿 × $0.625/百万</span><span>≈ $713</span></div>
+            <div class="cost-line"><span class="t2">输出 8.9 亿 × $1.90/百万</span><span>≈ $1,691</span></div>
+            <div class="cost-line total"><span>按 API 目录价粗估合计</span><span>≈ $2,404（¥17,300）</span></div>
+            <div class="callout callout-info mt12"><i data-icon="info" data-size="14"></i>若使用 ChatGPT 订阅（Plus / Pro），上述用量通常包含在套餐内，实际边际成本为 ¥0。</div>
+            <p class="s11 t3 mt12" style="line-height: var(--line-height-small);">估算基于 gpt-5.5 目录价与约 5.6:4.4 输入输出比，未含缓存命中折扣与免费额度。<b>实际费用以服务商账单为准。</b></p>
+          </div>
+        </div>
+
+        <!-- 数据导出 -->
+        <div class="section row-flex gap8">
+          <span class="s12 t2">导出全部统计数据：</span>
+          <button class="btn btn-secondary btn-sm" id="btnCsv"><i data-icon="download" data-size="14"></i>导出 CSV</button>
+          <button class="btn btn-secondary btn-sm" id="btnJson"><i data-icon="download" data-size="14"></i>导出 JSON</button>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 骨架屏 ========== -->
+      <section data-view="loading" hidden>
+        <div class="stat-grid">
+          <div class="sk" style="height: 96px; border-radius: var(--radius-md);"></div>
+          <div class="sk" style="height: 96px; border-radius: var(--radius-md);"></div>
+          <div class="sk" style="height: 96px; border-radius: var(--radius-md);"></div>
+          <div class="sk" style="height: 96px; border-radius: var(--radius-md);"></div>
+          <div class="sk" style="height: 96px; border-radius: var(--radius-md);"></div>
+        </div>
+        <div class="sk section" style="height: 240px; border-radius: var(--radius-md);"></div>
+        <div class="sk section" style="height: 280px; border-radius: var(--radius-md);"></div>
+      </section>
+
+      <!-- ========== 视图: 空数据 ========== -->
+      <section data-view="empty" hidden>
+        <div class="empty">
+          <div class="empty-icon"><i data-icon="chart" data-size="40"></i></div>
+          <div class="empty-title">暂无统计数据</div>
+          <p class="empty-desc">完成任意 Codex 会话后，这里会展示 Token 用量、趋势与高消耗会话排行。</p>
+          <a class="btn btn-secondary" href="sessions.html"><i data-icon="chat" data-size="14"></i>去看会话管理</a>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 错误 ========== -->
+      <section data-view="error" hidden>
+        <div class="empty is-error">
+          <div class="empty-icon"><i data-icon="alert" data-size="40"></i></div>
+          <div class="empty-title">统计数据读取失败</div>
+          <p class="empty-desc">本地索引数据库被占用，无法生成统计。请关闭正在运行的 Codex 会话后重试。</p>
+          <div class="path-block">~/.codex/state_5.sqlite · SQLITE_BUSY: database is locked</div>
+          <button class="btn btn-primary" id="btnRetryStats"><i data-icon="refresh" data-size="14"></i>重试</button>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script>
+/* ===== Token 统计页交互（图表为纯手写 SVG，无外部库） ===== */
+(function () {
+  /* ---------- 维度分布 ---------- */
+  var DIST = {
+    project: [
+      { label: 'XOAssets', text: '15.3 亿 · 75.5%', w: 100 },
+      { label: 'YT', text: '2.3 亿 · 11.3%', w: 15.0 },
+      { label: 'ZreoPassword', text: '1.3 亿 · 6.4%', w: 8.5 },
+      { label: 'Codex-O', text: '8,900 万 · 4.4%', w: 5.8 },
+      { label: 'blog-redesign', text: '3,100 万 · 1.5%', w: 2.0 },
+      { label: '其他', text: '1,700 万 · 0.8%', w: 1.1 }
+    ],
+    model: [
+      { label: 'gpt-5.5', text: '16.2 亿 · 79.9%', w: 100 },
+      { label: 'codex-mini-latest', text: '2.9 亿 · 14.3%', w: 17.9 },
+      { label: 'gpt-5.6-terra', text: '7,000 万 · 3.5%', w: 4.3 },
+      { label: 'o4-mini', text: '4,700 万 · 2.3%', w: 2.9 }
+    ],
+    source: [
+      { label: 'vscode', text: '14.8 亿 · 73.0%', w: 100 },
+      { label: 'cli', text: '4.6 亿 · 22.7%', w: 31.1 },
+      { label: 'exec', text: '8,700 万 · 4.3%', w: 5.9 }
+    ],
+    time: [
+      { label: '9 月', text: '3.15 亿 · 15.5%', w: 45.0 },
+      { label: '10 月', text: '5.30 亿 · 26.1%', w: 75.7 },
+      { label: '11 月', text: '7.00 亿 · 34.5%', w: 100 },
+      { label: '12 月（进行中）', text: '4.82 亿 · 23.8%', w: 68.9 }
+    ]
+  };
+
+  var distEl = document.getElementById('distBars');
+  function renderDist(dim) {
+    distEl.innerHTML = '';
+    DIST[dim].forEach(function (d, i) {
+      var row = document.createElement('div');
+      row.className = 'bar-row';
+      row.innerHTML =
+        '<span class="bar-label ellipsis"></span>' +
+        '<span class="bar-track"><span class="bar-fill" style="width: 0%; background: var(--chart-' + ((i % 8) + 1) + ');"></span></span>' +
+        '<span class="bar-value"></span>';
+      row.querySelector('.bar-label').textContent = d.label;
+      row.querySelector('.bar-value').textContent = d.text;
+      distEl.appendChild(row);
+      var fill = row.querySelector('.bar-fill');
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { fill.style.width = d.w + '%'; });
+      });
+    });
+  }
+  renderDist('project');
+  document.addEventListener('tab:change', function (e) { renderDist(e.detail.id); });
+
+  /* ---------- 趋势折线（纯 SVG） ---------- */
+  var TREND = {
+    day:   { unit: '近 14 天合计 3.80 亿', data: [['12-06',18],['12-07',9],['12-08',22],['12-09',31],['12-10',26],['12-11',35],['12-12',41],['12-13',38],['12-14',52],['12-15',20],['12-16',24],['12-17',19],['12-18',33],['12-19',12]] },
+    week:  { unit: '近 8 周合计 8.98 亿', data: [['W45',82],['W46',96],['W47',118],['W48',104],['W49',132],['W50',149],['W51',121],['W52',96]] },
+    month: { unit: '近 4 个月合计 20.27 亿', data: [['9月',315],['10月',530],['11月',700],['12月',482]] }
+  };
+  var NS = 'http://www.w3.org/2000/svg';
+  var chart = document.getElementById('trendChart');
+  var tip = document.createElement('div');
+  tip.className = 'chart-tip';
+  document.body.appendChild(tip);
+
+  function niceMax(v) {
+    var pow = Math.pow(10, Math.floor(Math.log10(v)));
+    var n = v / pow;
+    var nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10;
+    return nice * pow;
+  }
+  function fmtVal(v) {
+    return v >= 100 ? (v / 100).toFixed(2) + ' 亿' : v + '00 万';
+  }
+  function el(name, attrs) {
+    var e = document.createElementNS(NS, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  function renderTrend(period) {
+    var ds = TREND[period].data;
+    document.getElementById('trendTotal').textContent = TREND[period].unit;
+    chart.innerHTML = '';
+    var W = 720, H = 240, L = 46, R = 14, T = 14, B = 30;
+    var max = niceMax(Math.max.apply(null, ds.map(function (d) { return d[1]; })));
+    var X = function (i) { return L + (W - L - R) * (ds.length === 1 ? 0.5 : i / (ds.length - 1)); };
+    var Y = function (v) { return T + (H - T - B) * (1 - v / max); };
+
+    /* 网格 + Y 轴标签 */
+    for (var g = 1; g <= 4; g++) {
+      var gv = max * g / 4;
+      chart.appendChild(el('line', { x1: L, y1: Y(gv), x2: W - R, y2: Y(gv), 'class': 'chart-grid-line' }));
+      var t = el('text', { x: L - 8, y: Y(gv) + 4, 'text-anchor': 'end', 'class': 'axis-label' });
+      t.textContent = gv >= 1000 ? (gv / 100) + '亿' : gv;
+      chart.appendChild(t);
+    }
+    /* X 轴标签（最多 8 个） */
+    var step = Math.ceil(ds.length / 8);
+    ds.forEach(function (d, i) {
+      if (i % step !== 0 && i !== ds.length - 1) return;
+      var t = el('text', { x: X(i), y: H - 8, 'text-anchor': 'middle', 'class': 'axis-label' });
+      t.textContent = d[0];
+      chart.appendChild(t);
+    });
+
+    /* 面积 + 折线 */
+    var line = '', area = 'M' + X(0) + ',' + Y(0);
+    ds.forEach(function (d, i) {
+      line += (i === 0 ? 'M' : 'L') + X(i) + ',' + Y(d[1]);
+      area += 'L' + X(i) + ',' + Y(d[1]);
+    });
+    area += 'L' + X(ds.length - 1) + ',' + Y(0) + 'Z';
+    chart.appendChild(el('path', { d: area, 'class': 'chart-area' }));
+    chart.appendChild(el('path', { d: line, 'class': 'chart-line' }));
+
+    /* 数据点 + 热区 */
+    ds.forEach(function (d, i) {
+      chart.appendChild(el('circle', { cx: X(i), cy: Y(d[1]), r: 3, 'class': 'chart-dot' }));
+      var hit = el('circle', { cx: X(i), cy: Y(d[1]), r: 12, 'class': 'chart-dot-hit' });
+      hit.addEventListener('mouseenter', function (e) {
+        tip.textContent = d[0] + ' · ' + fmtVal(d[1]);
+        tip.style.display = 'block';
+      });
+      hit.addEventListener('mousemove', function (e) {
+        tip.style.left = (e.clientX + 12) + 'px';
+        tip.style.top = (e.clientY - 12) + 'px';
+      });
+      hit.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+      chart.appendChild(hit);
+    });
+  }
+  renderTrend('day');
+  document.addEventListener('segment:change', function (e) {
+    if (TREND[e.detail.value]) renderTrend(e.detail.value);
+  });
+
+  /* ---------- 导出 ---------- */
+  document.getElementById('btnCsv').addEventListener('click', function () {
+    window.showToast({ type: 'success', title: '已导出 token-stats.csv', desc: '54 条会话统计 · 9 KB' });
+  });
+  document.getElementById('btnJson').addEventListener('click', function () {
+    window.showToast({ type: 'success', title: '已导出 token-stats.json', desc: '含维度聚合与趋势序列 · 31 KB' });
+  });
+})();
+</script>
+</body>
+</html>

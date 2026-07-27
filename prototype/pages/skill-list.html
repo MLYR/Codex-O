@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<!-- 页面: Skill 列表（首页） | 对应 PRD: P0-01 | 优先级: P0
+     精做要点: 搜索 + 来源/状态筛选 + 4 维排序 / 21 用户 Skill 网格 / 6 系统 Skill 折叠区(不可卸载)
+     状态样例: 1 已禁用灰显(obsidian-sync) / 2 可更新角标(frontend-design, pdfkit-py)
+     AI 降级: 13 英文 + 2 混合 Skill 的描述回退英文原文并标注；6 中文 Skill 不受影响 -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我的 Skills · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<script>
+  window.PROTO = {
+    name: 'Skill 列表（首页）· P0-01',
+    states: ['normal', 'loading', 'empty', 'error'],
+    aiStates: true,
+    actions: [{ id: 'rescan', label: '重新扫描演示' }]
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item active" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>我的 Skills</h1>
+      <span class="sub">27 个 · 用户 21 / 系统 6</span>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <!-- 全局 AI 降级横幅 -->
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，Skill 解析展示英文原文</span>
+        <span class="ai-text-down">AI 服务不可用，Skill 解析已回退为英文原文</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <a class="banner-act" href="settings.html">去设置</a>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+
+      <!-- ========== 视图: 正常 ========== -->
+      <section data-view="normal">
+        <!-- 工具栏: 搜索 + 筛选 + 排序 -->
+        <div class="row-flex gap8" style="flex-wrap: wrap;">
+          <div class="search-box">
+            <i data-icon="search" data-size="14"></i>
+            <input class="input" id="q" type="text" placeholder="搜索名称或中文解析…" data-hotkey-search>
+            <span class="kbd">⌘K</span>
+          </div>
+          <div class="select-wrap">
+            <select id="fSource" aria-label="来源筛选">
+              <option value="all">来源：全部</option>
+              <option value="local">本地自建</option>
+              <option value="github">GitHub</option>
+              <option value="market">市场安装</option>
+              <option value="unknown">未知</option>
+            </select>
+            <i data-icon="chevron-down" data-size="14"></i>
+          </div>
+          <div class="select-wrap">
+            <select id="fStatus" aria-label="状态筛选">
+              <option value="all">状态：全部</option>
+              <option value="normal">正常</option>
+              <option value="update">可更新</option>
+              <option value="disabled">已禁用</option>
+            </select>
+            <i data-icon="chevron-down" data-size="14"></i>
+          </div>
+          <div class="select-wrap">
+            <select id="fSort" aria-label="排序方式">
+              <option value="name">排序：名称 A→Z</option>
+              <option value="updated">排序：最近更新</option>
+              <option value="installed">排序：最近安装</option>
+              <option value="size">排序：文件大小</option>
+            </select>
+            <i data-icon="chevron-down" data-size="14"></i>
+          </div>
+          <span class="s12 t3 ml-auto" id="visibleCount">21 个用户 Skill</span>
+          <button class="btn btn-ghost" id="btnRescan"><i data-icon="refresh" data-size="14"></i>重新扫描</button>
+        </div>
+
+        <!-- 用户 Skills 分区 -->
+        <div class="section" style="margin-top: var(--space-4);">
+          <div class="section-head">
+            <h2 class="section-title">用户 Skills</h2>
+            <span class="count-badge primary">21</span>
+            <span class="section-note">13 英文由 AI 解析为中文 · 6 中文直接提取 · 2 混合</span>
+          </div>
+
+          <div class="skill-grid" id="userGrid">
+
+            <!-- 1. 可更新样例 -->
+            <a class="skill-card" href="skill-detail.html" data-source="github" data-status="update" data-name="frontend-design" data-installed="2025-11-02" data-days="3" data-size="12698">
+              <div class="skill-card-head">
+                <span class="skill-icon">F</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">frontend-design</div>
+                  <div class="skill-ver">v1.2.0</div>
+                </div>
+                <span class="pill pill-info"><span class="dot info"></span>可更新 <span class="mono">v1.3.0</span></span>
+              </div>
+              <p class="skill-desc clamp2" data-cn="让 AI 生成高质量前端界面代码，兼顾设计审美与工程质量" data-en="Generate high-quality frontend UI code with balanced design aesthetics and engineering quality.">让 AI 生成高质量前端界面代码，兼顾设计审美与工程质量</p>
+              <div class="skill-foot"><span class="tag tag-system"><i data-icon="github" data-size="12"></i>GitHub</span><span class="tag tag-degraded">AI 降级</span><span class="time">3 天前更新</span></div>
+            </a>
+
+            <!-- 2 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="normal" data-name="ui-ux-pro-max" data-installed="2025-10-28" data-days="5" data-size="8294">
+              <div class="skill-card-head">
+                <span class="skill-icon">U</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">ui-ux-pro-max</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="资深 UI/UX 专家视角，审查并重构界面的可用性与视觉层级" data-en="Senior UI/UX expert persona that audits and refactors interface usability and visual hierarchy.">资深 UI/UX 专家视角，审查并重构界面的可用性与视觉层级</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">5 天前更新</span></div>
+            </a>
+
+            <!-- 3 -->
+            <a class="skill-card" href="skill-detail.html" data-source="github" data-status="normal" data-name="web-animation-design" data-installed="2025-10-19" data-days="7" data-size="15565">
+              <div class="skill-card-head">
+                <span class="skill-icon">W</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">web-animation-design</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="为网页与组件设计流畅动效，输出 CSS 与 Web Animations 实现" data-en="Design fluid motion for pages and components with CSS and Web Animations output.">为网页与组件设计流畅动效，输出 CSS 与 Web Animations 实现</p>
+              <div class="skill-foot"><span class="tag tag-system"><i data-icon="github" data-size="12"></i>GitHub</span><span class="tag tag-degraded">AI 降级</span><span class="time">1 周前更新</span></div>
+            </a>
+
+            <!-- 4 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="normal" data-name="impeccable" data-installed="2025-10-19" data-days="7" data-size="6963">
+              <div class="skill-card-head">
+                <span class="skill-icon">I</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">impeccable</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="界面反 slop 审查清单，逐条排查 AI 生成页面的设计债" data-en="Anti-slop audit checklist that catches design debt in AI-generated pages.">界面反 slop 审查清单，逐条排查 AI 生成页面的设计债</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">1 周前更新</span></div>
+            </a>
+
+            <!-- 5 中文直接提取（AI 降级不影响） -->
+            <a class="skill-card" href="skill-detail.html" data-source="local" data-status="normal" data-name="huashu-design" data-installed="2025-10-05" data-days="14" data-size="4301">
+              <div class="skill-card-head">
+                <span class="skill-icon">H</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">huashu-design</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2">基于华数设计规范搭建页面，输出符合设计体系的组件代码</p>
+              <div class="skill-foot"><span class="tag tag-user">本地自建</span><span class="time">2 周前更新</span></div>
+            </a>
+
+            <!-- 6 -->
+            <a class="skill-card" href="skill-detail.html" data-source="github" data-status="normal" data-name="codex-token-usage" data-installed="2025-10-05" data-days="14" data-size="9830">
+              <div class="skill-card-head">
+                <span class="skill-icon">C</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">codex-token-usage</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="统计 Codex 会话 Token 用量与费用，生成日报和趋势图" data-en="Track Codex session token usage and cost with daily reports and trend charts.">统计 Codex 会话 Token 用量与费用，生成日报和趋势图</p>
+              <div class="skill-foot"><span class="tag tag-system"><i data-icon="github" data-size="12"></i>GitHub</span><span class="tag tag-degraded">AI 降级</span><span class="time">2 周前更新</span></div>
+            </a>
+
+            <!-- 7. 可更新样例 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="update" data-name="pdfkit-py" data-installed="2025-09-26" data-days="21" data-size="22835">
+              <div class="skill-card-head">
+                <span class="skill-icon">P</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">pdfkit-py</div>
+                  <div class="skill-ver">v1.1.0</div>
+                </div>
+                <span class="pill pill-info"><span class="dot info"></span>可更新 <span class="mono">v1.2.0</span></span>
+              </div>
+              <p class="skill-desc clamp2" data-cn="用 Python 生成与处理 PDF：排版、水印、合并与拆分" data-en="Generate and manipulate PDFs with Python: layout, watermarks, merge and split.">用 Python 生成与处理 PDF：排版、水印、合并与拆分</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">3 周前更新</span></div>
+            </a>
+
+            <!-- 8 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="normal" data-name="xlsx" data-installed="2025-09-26" data-days="21" data-size="19354">
+              <div class="skill-card-head">
+                <span class="skill-icon">X</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">xlsx</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="读写 Excel 工作簿，支持公式、样式与多 Sheet 批量处理" data-en="Read and write Excel workbooks with formulas, styling and multi-sheet batch processing.">读写 Excel 工作簿，支持公式、样式与多 Sheet 批量处理</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">3 周前更新</span></div>
+            </a>
+
+            <!-- 9 来源未知 -->
+            <a class="skill-card" href="skill-detail.html" data-source="unknown" data-status="normal" data-name="agent-reach" data-installed="2025-08-30" data-days="30" data-size="7475">
+              <div class="skill-card-head">
+                <span class="skill-icon">A</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">agent-reach</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="让 Agent 主动联网检索资料并汇总结论，附引用来源" data-en="Let the agent proactively search the web and summarize findings with cited sources.">让 Agent 主动联网检索资料并汇总结论，附引用来源</p>
+              <div class="skill-foot"><span class="tag tag-unknown">未知来源</span><span class="tag tag-degraded">AI 降级</span><span class="time">1 个月前更新</span></div>
+            </a>
+
+            <!-- 10 混合语言 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="normal" data-name="tencentmap-map-assistant" data-installed="2025-08-30" data-days="30" data-size="11776">
+              <div class="skill-card-head">
+                <span class="skill-icon">T</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">tencentmap-map-assistant</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="腾讯地图接入助手：地点检索、路径规划与地图组件集成" data-en="Tencent Maps integration assistant: place search, routing and map components.">腾讯地图接入助手：地点检索、路径规划与地图组件集成</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">1 个月前更新</span></div>
+            </a>
+
+            <!-- 11 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="normal" data-name="pptx" data-installed="2025-08-22" data-days="38" data-size="25702">
+              <div class="skill-card-head">
+                <span class="skill-icon">P</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">pptx</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="创建与修改 PPTX 演示文稿：母版、版式与图表批量生成" data-en="Create and edit PPTX decks: masters, layouts and bulk chart generation.">创建与修改 PPTX 演示文稿：母版、版式与图表批量生成</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">1 个月前更新</span></div>
+            </a>
+
+            <!-- 12 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="normal" data-name="docx" data-installed="2025-08-15" data-days="60" data-size="19866">
+              <div class="skill-card-head">
+                <span class="skill-icon">D</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">docx</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="生成与编辑 Word 文档，支持样式模板与自动目录" data-en="Generate and edit Word documents with style templates and automatic TOC.">生成与编辑 Word 文档，支持样式模板与自动目录</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">2 个月前更新</span></div>
+            </a>
+
+            <!-- 13 中文 · 体积最小 -->
+            <a class="skill-card" href="skill-detail.html" data-source="local" data-status="normal" data-name="git-commit-zh" data-installed="2025-08-15" data-days="60" data-size="2662">
+              <div class="skill-card-head">
+                <span class="skill-icon">G</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">git-commit-zh</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2">生成符合约定式提交规范的中文 commit message，自动区分类型与范围</p>
+              <div class="skill-foot"><span class="tag tag-user">本地自建</span><span class="time">2 个月前更新</span></div>
+            </a>
+
+            <!-- 14 -->
+            <a class="skill-card" href="skill-detail.html" data-source="github" data-status="normal" data-name="api-doc-writer" data-installed="2025-08-02" data-days="60" data-size="14029">
+              <div class="skill-card-head">
+                <span class="skill-icon">A</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">api-doc-writer</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="从代码注释与类型定义生成 API 文档，输出 Markdown 与 OpenAPI" data-en="Generate API docs from code comments and type definitions in Markdown and OpenAPI.">从代码注释与类型定义生成 API 文档，输出 Markdown 与 OpenAPI</p>
+              <div class="skill-foot"><span class="tag tag-system"><i data-icon="github" data-size="12"></i>GitHub</span><span class="tag tag-degraded">AI 降级</span><span class="time">2 个月前更新</span></div>
+            </a>
+
+            <!-- 15 中文 -->
+            <a class="skill-card" href="skill-detail.html" data-source="local" data-status="normal" data-name="docker-helper" data-installed="2025-07-20" data-days="90" data-size="6042">
+              <div class="skill-card-head">
+                <span class="skill-icon">D</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">docker-helper</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2">编写与调优 Dockerfile 和 compose 配置，排查容器构建问题</p>
+              <div class="skill-foot"><span class="tag tag-user">本地自建</span><span class="time">3 个月前更新</span></div>
+            </a>
+
+            <!-- 16 中文 -->
+            <a class="skill-card" href="skill-detail.html" data-source="local" data-status="normal" data-name="weekly-report-cn" data-installed="2025-07-20" data-days="90" data-size="3482">
+              <div class="skill-card-head">
+                <span class="skill-icon">W</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">weekly-report-cn</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2">把 Git 提交与任务记录汇总为中文周报，按迭代分组输出</p>
+              <div class="skill-foot"><span class="tag tag-user">本地自建</span><span class="time">3 个月前更新</span></div>
+            </a>
+
+            <!-- 17 中文 -->
+            <a class="skill-card" href="skill-detail.html" data-source="local" data-status="normal" data-name="code-review-zh" data-installed="2025-07-12" data-days="90" data-size="6246">
+              <div class="skill-card-head">
+                <span class="skill-icon">C</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">code-review-zh</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2">中文代码评审：按严重度分级输出问题、建议与修改示例</p>
+              <div class="skill-foot"><span class="tag tag-user">本地自建</span><span class="time">3 个月前更新</span></div>
+            </a>
+
+            <!-- 18 混合 · 体积最大 -->
+            <a class="skill-card" href="skill-detail.html" data-source="github" data-status="normal" data-name="wechat-miniprogram" data-installed="2025-07-12" data-days="90" data-size="87245">
+              <div class="skill-card-head">
+                <span class="skill-icon">W</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">wechat-miniprogram</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="微信小程序开发全家桶：页面脚手架、API 封装与审核清单" data-en="WeChat Mini Program toolkit: page scaffolding, API wrappers and review checklist.">微信小程序开发全家桶：页面脚手架、API 封装与审核清单</p>
+              <div class="skill-foot"><span class="tag tag-system"><i data-icon="github" data-size="12"></i>GitHub</span><span class="tag tag-degraded">AI 降级</span><span class="time">3 个月前更新</span></div>
+            </a>
+
+            <!-- 19 -->
+            <a class="skill-card" href="skill-detail.html" data-source="market" data-status="normal" data-name="tdesign-react" data-installed="2025-06-28" data-days="120" data-size="14950">
+              <div class="skill-card-head">
+                <span class="skill-icon">T</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">tdesign-react</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="TDesign React 组件库专家：组件选型、属性配置与无障碍检查" data-en="TDesign React expert: component selection, prop configuration and a11y checks.">TDesign React 组件库专家：组件选型、属性配置与无障碍检查</p>
+              <div class="skill-foot"><span class="tag tag-market">市场安装</span><span class="tag tag-degraded">AI 降级</span><span class="time">4 个月前更新</span></div>
+            </a>
+
+            <!-- 20 -->
+            <a class="skill-card" href="skill-detail.html" data-source="github" data-status="normal" data-name="playwright-test" data-installed="2025-06-28" data-days="120" data-size="10445">
+              <div class="skill-card-head">
+                <span class="skill-icon">P</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">playwright-test</div>
+                  <div class="skill-ver">—</div>
+                </div>
+              </div>
+              <p class="skill-desc clamp2" data-cn="编写 Playwright 端到端测试，生成稳定选择器与测试夹具" data-en="Author Playwright end-to-end tests with stable selectors and fixtures.">编写 Playwright 端到端测试，生成稳定选择器与测试夹具</p>
+              <div class="skill-foot"><span class="tag tag-system"><i data-icon="github" data-size="12"></i>GitHub</span><span class="tag tag-degraded">AI 降级</span><span class="time">4 个月前更新</span></div>
+            </a>
+
+            <!-- 21 已禁用样例（灰显，整卡不降透明度） -->
+            <a class="skill-card is-disabled" href="skill-detail.html" data-source="local" data-status="disabled" data-name="obsidian-sync" data-installed="2025-06-01" data-days="150" data-size="3891">
+              <div class="skill-card-head">
+                <span class="skill-icon">O</span>
+                <div class="skill-title-block">
+                  <div class="skill-name">obsidian-sync</div>
+                  <div class="skill-ver">—</div>
+                </div>
+                <span class="pill pill-neutral"><span class="dot off"></span>已禁用</span>
+              </div>
+              <p class="skill-desc clamp2">把会话产出整理为 Obsidian 笔记，按项目归档并自动生成双链</p>
+              <div class="skill-foot"><span class="tag tag-user">本地自建</span><span class="time">5 个月前更新</span></div>
+            </a>
+
+          </div>
+
+          <!-- 搜索/筛选无结果（正常视图内的迷你空态） -->
+          <div class="empty" id="noResult" hidden style="padding: var(--space-10) var(--space-6);">
+            <div class="empty-icon" style="width: 64px; height: 64px;"><i data-icon="search" data-size="28"></i></div>
+            <div class="empty-title">未找到匹配的 Skill</div>
+            <p class="empty-desc">试试更换关键词，或清除来源 / 状态筛选条件。</p>
+            <button class="btn btn-secondary" id="btnClearFilter">清除全部筛选</button>
+          </div>
+        </div>
+
+        <!-- 系统 Skills 分区（可折叠，标注不可卸载） -->
+        <div class="section">
+          <div class="collapse open">
+            <div class="collapse-head">
+              <span class="chev"><i data-icon="chevron-right" data-size="14"></i></span>
+              <span class="collapse-title">系统 Skills</span>
+              <span class="count-badge">6</span>
+              <span class="tag tag-system">内置 · 不可卸载</span>
+              <span class="collapse-meta ml-auto">/Applications/Codex-O.app/Contents/Resources/skills/.system/</span>
+            </div>
+            <div class="collapse-body" style="padding: var(--space-4); padding-top: var(--space-3);">
+              <div class="skill-grid">
+                <a class="skill-card" href="skill-detail.html" style="height: 132px;">
+                  <div class="skill-card-head">
+                    <span class="skill-icon">I</span>
+                    <div class="skill-title-block"><div class="skill-name">.system/init</div><div class="skill-ver">内置</div></div>
+                  </div>
+                  <p class="skill-desc clamp2">初始化项目级 AGENTS.md，扫描技术栈与目录约定</p>
+                  <div class="skill-foot"><span class="tag tag-system">系统内置</span><span class="time">不可卸载</span></div>
+                </a>
+                <a class="skill-card" href="skill-detail.html" style="height: 132px;">
+                  <div class="skill-card-head">
+                    <span class="skill-icon">C</span>
+                    <div class="skill-title-block"><div class="skill-name">.system/compact</div><div class="skill-ver">内置</div></div>
+                  </div>
+                  <p class="skill-desc clamp2">压缩当前会话上下文，保留关键决策与待办事项</p>
+                  <div class="skill-foot"><span class="tag tag-system">系统内置</span><span class="time">不可卸载</span></div>
+                </a>
+                <a class="skill-card" href="skill-detail.html" style="height: 132px;">
+                  <div class="skill-card-head">
+                    <span class="skill-icon">R</span>
+                    <div class="skill-title-block"><div class="skill-name">.system/review</div><div class="skill-ver">内置</div></div>
+                  </div>
+                  <p class="skill-desc clamp2">对未提交变更执行系统级代码审查</p>
+                  <div class="skill-foot"><span class="tag tag-system">系统内置</span><span class="time">不可卸载</span></div>
+                </a>
+                <a class="skill-card" href="skill-detail.html" style="height: 132px;">
+                  <div class="skill-card-head">
+                    <span class="skill-icon">T</span>
+                    <div class="skill-title-block"><div class="skill-name">.system/test</div><div class="skill-ver">内置</div></div>
+                  </div>
+                  <p class="skill-desc clamp2">运行项目测试套件并汇总失败用例</p>
+                  <div class="skill-foot"><span class="tag tag-system">系统内置</span><span class="time">不可卸载</span></div>
+                </a>
+                <a class="skill-card" href="skill-detail.html" style="height: 132px;">
+                  <div class="skill-card-head">
+                    <span class="skill-icon">C</span>
+                    <div class="skill-title-block"><div class="skill-name">.system/commit</div><div class="skill-ver">内置</div></div>
+                  </div>
+                  <p class="skill-desc clamp2">分析暂存区变更，生成提交信息并创建提交</p>
+                  <div class="skill-foot"><span class="tag tag-system">系统内置</span><span class="time">不可卸载</span></div>
+                </a>
+                <a class="skill-card" href="skill-detail.html" style="height: 132px;">
+                  <div class="skill-card-head">
+                    <span class="skill-icon">E</span>
+                    <div class="skill-title-block"><div class="skill-name">.system/explain</div><div class="skill-ver">内置</div></div>
+                  </div>
+                  <p class="skill-desc clamp2">解释选中代码的行为、依赖与潜在副作用</p>
+                  <div class="skill-foot"><span class="tag tag-system">系统内置</span><span class="time">不可卸载</span></div>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 骨架屏（含首次批量 AI 解析进度） ========== -->
+      <section data-view="loading" hidden>
+        <div class="card" style="margin-bottom: var(--space-4);">
+          <div class="row-flex gap12">
+            <span class="spinner"></span>
+            <div style="flex: 1; min-width: 0;">
+              <div class="s12 w600">首次扫描：AI 正在批量解析 Skill 描述</div>
+              <div class="s11 t3 mono" style="margin-top: 2px;">8 / 21 · 约需 20 秒 · gpt-4o-mini</div>
+            </div>
+            <span class="s11 t3">后台继续，可离开本页</span>
+          </div>
+          <div class="progress mt12"><i style="width: 38%;"></i></div>
+        </div>
+        <div class="row-flex gap8" style="margin-bottom: var(--space-4);">
+          <div class="sk" style="width: 280px; height: 32px; border-radius: var(--radius-sm);"></div>
+          <div class="sk" style="width: 120px; height: 32px; border-radius: var(--radius-sm);"></div>
+          <div class="sk" style="width: 120px; height: 32px; border-radius: var(--radius-sm);"></div>
+        </div>
+        <div class="sk sk-text" style="width: 140px; margin-bottom: var(--space-3);"></div>
+        <div class="skill-grid">
+          <div class="sk sk-card"></div><div class="sk sk-card"></div><div class="sk sk-card"></div>
+          <div class="sk sk-card"></div><div class="sk sk-card"></div><div class="sk sk-card"></div>
+          <div class="sk sk-card"></div><div class="sk sk-card"></div><div class="sk sk-card"></div>
+        </div>
+        <div class="section">
+          <div class="sk sk-text" style="width: 110px; margin-bottom: var(--space-3);"></div>
+          <div class="sk" style="height: 36px; border-radius: var(--radius-md);"></div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 空数据 ========== -->
+      <section data-view="empty" hidden>
+        <div class="empty">
+          <div class="empty-icon"><i data-icon="box" data-size="40"></i></div>
+          <div class="empty-title">还没有安装任何 Skill</div>
+          <p class="empty-desc">Skill 可以教会 Codex 处理特定任务。从市场挑选官方精选的 39 个 Skill，或导入本地 SKILL.md 开始使用。</p>
+          <div class="row-flex gap8">
+            <a class="btn btn-primary" href="market.html"><i data-icon="store" data-size="14"></i>去市场逛逛</a>
+            <a class="btn btn-secondary" href="install.html"><i data-icon="folder" data-size="14"></i>本地导入</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 视图: 错误 ========== -->
+      <section data-view="error" hidden>
+        <div class="empty is-error">
+          <div class="empty-icon"><i data-icon="alert" data-size="40"></i></div>
+          <div class="empty-title">目录扫描失败</div>
+          <p class="empty-desc">读取 Skill 目录时出错，请检查目录权限后重试。</p>
+          <div class="path-block">~/.codex/skills/ · EACCES: permission denied, scandir</div>
+          <div class="row-flex gap8">
+            <button class="btn btn-primary" id="btnRetryScan"><i data-icon="refresh" data-size="14"></i>重新扫描</button>
+            <button class="btn btn-ghost">查看日志</button>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+
+<script>
+/* ===== 列表页交互：搜索 / 筛选 / 排序 / 重新扫描 ===== */
+(function () {
+  var grid = document.getElementById('userGrid');
+  var cards = Array.prototype.slice.call(grid.querySelectorAll('.skill-card'));
+  var q = document.getElementById('q');
+  var fSource = document.getElementById('fSource');
+  var fStatus = document.getElementById('fStatus');
+  var fSort = document.getElementById('fSort');
+  var noResult = document.getElementById('noResult');
+  var visibleCount = document.getElementById('visibleCount');
+
+  function apply() {
+    var kw = q.value.trim().toLowerCase();
+    var src = fSource.value, st = fStatus.value, sort = fSort.value;
+    var visible = 0;
+
+    cards.forEach(function (c) {
+      var hay = (c.getAttribute('data-name') + ' ' + (c.getAttribute('data-cn') || '') + ' ' + (c.getAttribute('data-en') || '')).toLowerCase();
+      var ok = (!kw || hay.indexOf(kw) > -1)
+        && (src === 'all' || c.getAttribute('data-source') === src)
+        && (st === 'all' || c.getAttribute('data-status') === st);
+      c.hidden = !ok;
+      if (ok) visible++;
+    });
+
+    /* 排序（仅重排可见卡，隐藏卡保持原位不影响） */
+    var sorted = cards.slice().sort(function (a, b) {
+      if (sort === 'name') return a.getAttribute('data-name').localeCompare(b.getAttribute('data-name'));
+      if (sort === 'updated') return parseInt(a.getAttribute('data-days')) - parseInt(b.getAttribute('data-days'));
+      if (sort === 'installed') return b.getAttribute('data-installed').localeCompare(a.getAttribute('data-installed'));
+      if (sort === 'size') return parseInt(b.getAttribute('data-size')) - parseInt(a.getAttribute('data-size'));
+      return 0;
+    });
+    sorted.forEach(function (c) { grid.appendChild(c); });
+
+    noResult.hidden = visible !== 0;
+    grid.style.display = visible === 0 ? 'none' : '';
+    visibleCount.textContent = (kw || src !== 'all' || st !== 'all') ? ('匹配 ' + visible + ' / 21 个') : '21 个用户 Skill';
+  }
+
+  q.addEventListener('input', apply);
+  fSource.addEventListener('change', apply);
+  fStatus.addEventListener('change', apply);
+  fSort.addEventListener('change', apply);
+  document.getElementById('btnClearFilter').addEventListener('click', function () {
+    q.value = ''; fSource.value = 'all'; fStatus.value = 'all'; apply(); q.focus();
+  });
+
+  /* 重新扫描（真实按钮 + PROTO 演示按钮共用） */
+  function rescan() {
+    var btn = document.getElementById('btnRescan');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>扫描中…';
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.innerHTML = '';
+      var i = document.createElement('i');
+      i.setAttribute('data-icon', 'refresh'); i.setAttribute('data-size', '14');
+      btn.appendChild(i); btn.appendChild(document.createTextNode('重新扫描'));
+      window.ProtoIcons(btn);
+      window.showToast({ type: 'success', title: '扫描完成', desc: '共 27 个 Skill（用户 21 / 系统 6），无变更' });
+    }, 1200);
+  }
+  document.getElementById('btnRescan').addEventListener('click', rescan);
+  window.PROTO_ACTIONS = { rescan: rescan };
+})();
+</script>
+</body>
+</html>

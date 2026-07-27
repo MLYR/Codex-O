@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<!-- 页面: 设置 | 对应 PRD: P0-04 | 优先级: P0
+     覆盖: Provider 三选一表单联动(Ollama 隐藏 API Key) / 测试连接(成功+失败反馈)
+           解析语言偏好 / 关于 / 首次未配置引导 callout / 保存 Toast -->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>设置 · Codex-O</title>
+<link rel="stylesheet" href="../assets/tokens.css">
+<link rel="stylesheet" href="../assets/app.css">
+<style>
+  .lang-row { display: flex; align-items: flex-start; gap: var(--space-2); padding: var(--space-2) 0; cursor: pointer; }
+  .lang-row input { margin-top: 2px; accent-color: var(--color-primary); }
+  .about-line { display: flex; align-items: center; gap: var(--space-2); font-size: var(--font-size-small); color: var(--color-text-secondary); padding: 3px 0; }
+</style>
+<script>
+  window.PROTO = {
+    name: '设置 · P0-04',
+    states: ['normal'],
+    aiStates: true,
+    actions: [
+      { id: 'failTest', label: '测试失败演示' },
+      { id: 'onboard', label: '未配置引导' }
+    ]
+  };
+</script>
+<script src="../assets/icons.js"></script>
+<script src="../assets/app.js"></script>
+</head>
+<body>
+
+<div class="app">
+  <!-- ===== 侧边栏 ===== -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">Codex-O <span class="ver">v1.0.0</span></div>
+    <nav class="nav">
+      <div class="nav-group">SKILL</div>
+      <a class="nav-item" href="skill-list.html"><i data-icon="layers"></i>我的 Skills</a>
+      <a class="nav-item" href="market.html"><i data-icon="store"></i>Skill 市场</a>
+      <a class="nav-item" href="install.html"><i data-icon="download"></i>安装 Skill</a>
+      <a class="nav-item" href="updates.html"><i data-icon="update"></i>更新中心<span class="nav-right"><span class="count-badge info">2</span></span></a>
+      <div class="nav-group">会话与统计</div>
+      <a class="nav-item" href="sessions.html"><i data-icon="chat"></i>会话管理</a>
+      <a class="nav-item" href="token-stats.html"><i data-icon="chart"></i>Token 统计</a>
+      <div class="nav-group">扩展</div>
+      <a class="nav-item" href="mcp.html"><i data-icon="server"></i>MCP 管理<span class="nav-right"><span class="tag tag-p2">P2</span></span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="nav-item active" href="settings.html"><i data-icon="settings"></i>设置</a>
+      <div class="ai-mini"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常 · gpt-4o-mini</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></div>
+    </div>
+  </aside>
+
+  <!-- ===== 主区 ===== -->
+  <div class="main">
+    <header class="topbar">
+      <h1>设置</h1>
+      <span class="ai-status ml-auto"><span class="dot ai-dot"></span><span class="ai-text-ok">AI 正常</span><span class="ai-text-degraded">AI 降级中</span><span class="ai-text-down">AI 不可用</span></span>
+    </header>
+
+    <div class="banner">
+      <div class="banner-inner">
+        <i data-icon="alert" data-size="14"></i>
+        <span class="ai-text-degraded">AI 服务降级中，Skill 解析展示英文原文</span>
+        <span class="ai-text-down">AI 服务不可用，Skill 解析已回退为英文原文</span>
+        <button class="banner-act" data-ai-retry>重试连接</button>
+        <button class="banner-close" data-banner-close><i data-icon="x" data-size="14"></i></button>
+      </div>
+    </div>
+
+    <main class="content">
+      <div class="container-narrow">
+
+      <section data-view="normal">
+        <!-- 首次未配置引导（PROTO「未配置引导」切换显示） -->
+        <div class="callout callout-info" id="onboardTip" hidden style="margin-bottom: var(--space-4);">
+          <i data-icon="sparkles" data-size="14"></i>
+          <div>
+            <b>欢迎使用 Codex-O：</b>尚未配置 AI 服务。完成下方配置并「测试连接」后，即可使用 Skill 中文解析；暂不配置也可以管理 Skill 与会话，仅解析功能不可用。
+          </div>
+        </div>
+
+        <!-- AI 服务配置 -->
+        <div class="card">
+          <div class="section-head" style="margin-bottom: var(--space-4);">
+            <h2 class="section-title">AI 服务配置</h2>
+            <span class="s11 t3">用于 Skill 中文解析 · 密钥仅存储在本地</span>
+          </div>
+
+          <div class="field">
+            <span class="field-label">服务商</span>
+            <div class="radio-cards" id="providerCards">
+              <button class="radio-card active" data-provider="openai">
+                <span class="rc-name">OpenAI 兼容</span>
+                <span class="rc-desc">API Key + 自定义端点 · 推荐</span>
+              </button>
+              <button class="radio-card" data-provider="anthropic">
+                <span class="rc-name">Anthropic</span>
+                <span class="rc-desc">Claude 系列模型</span>
+              </button>
+              <button class="radio-card" data-provider="ollama">
+                <span class="rc-name">Ollama 本地</span>
+                <span class="rc-desc">无需 Key · 离线可用</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="field" id="fKey">
+            <label class="field-label" for="inKey">API Key</label>
+            <input class="input mono" id="inKey" type="password" value="sk-9f3c2d1e7a8b4c6d0e2f4a6b8c1d3e5f">
+            <p class="field-hint">仅存储在系统 keychain，不会上传或随日志输出。</p>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="inBase" id="lbBase">Base URL</label>
+            <input class="input mono" id="inBase" type="text" value="https://api.openai.com/v1">
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="inModel">解析模型</label>
+            <div class="select-wrap" style="width: 100%;">
+              <select id="inModel" style="width: 100%;">
+                <option>gpt-4o-mini（推荐 · 低成本）</option>
+                <option>gpt-4o</option>
+                <option>gpt-5.5</option>
+                <option>gpt-5.6-terra</option>
+              </select>
+              <i data-icon="chevron-down" data-size="14"></i>
+            </div>
+            <p class="field-hint" id="costHint">按 gpt-4o-mini 估算：全量解析 21 个 Skill 约 ¥0.2</p>
+          </div>
+
+          <div class="row-flex gap8">
+            <button class="btn btn-secondary" id="btnTest"><i data-icon="zap" data-size="14"></i>测试连接</button>
+            <button class="btn btn-primary" id="btnSave"><i data-icon="check" data-size="14"></i>保存配置</button>
+          </div>
+
+          <!-- 测试连接结果（成功 / 失败） -->
+          <div class="callout callout-success mt12" id="testOk" hidden><i data-icon="check-circle" data-size="14"></i><span>连接成功 · <b class="mono" id="testModel">gpt-4o-mini</b> 可用（延迟 <span class="mono">382 ms</span>）</span></div>
+          <div class="callout callout-danger mt12" id="testFail" hidden><i data-icon="alert" data-size="14"></i><span>连接失败：<span class="mono">401 Unauthorized</span> · API Key 无效或已过期，请检查后重试。</span></div>
+        </div>
+
+        <!-- 解析语言偏好 -->
+        <div class="card section">
+          <div class="section-head" style="margin-bottom: var(--space-2);">
+            <h2 class="section-title">解析语言偏好</h2>
+            <span class="s11 t3">重新解析后生效</span>
+          </div>
+          <label class="lang-row">
+            <input type="radio" name="lang" checked>
+            <span><span class="w600 s12" style="display: block;">中文（默认）</span><span class="s11 t3">英文 Skill 由 AI 解析为中文三要素</span></span>
+          </label>
+          <label class="lang-row">
+            <input type="radio" name="lang">
+            <span><span class="w600 s12" style="display: block;">English</span><span class="s11 t3">始终展示原始 description，不做翻译解析</span></span>
+          </label>
+          <label class="lang-row">
+            <input type="radio" name="lang">
+            <span><span class="w600 s12" style="display: block;">跟随原文</span><span class="s11 t3">中文 Skill 展示中文，英文 Skill 展示英文</span></span>
+          </label>
+        </div>
+
+        <!-- 关于 -->
+        <div class="card section">
+          <div class="section-head" style="margin-bottom: var(--space-2);"><h2 class="section-title">关于</h2></div>
+          <div class="about-line"><span class="w600">Codex-O</span><span class="mono t3">v1.0.0</span><span class="tag tag-system">Tauri 2</span><span class="tag tag-system">MIT 开源</span></div>
+          <div class="about-line">Codex CLI 中文用户的 Skill 管理 + 会话 / Token 统计桌面工具。</div>
+          <div class="row-flex gap8 mt8">
+            <a class="btn btn-ghost btn-sm" href="#" onclick="return false;"><i data-icon="github" data-size="14"></i>GitHub 仓库</a>
+            <button class="btn btn-ghost btn-sm" id="btnCheckApp"><i data-icon="refresh" data-size="14"></i>检查更新</button>
+          </div>
+        </div>
+      </section>
+
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+/* ===== 设置页交互 ===== */
+(function () {
+  var PROVIDERS = {
+    openai: {
+      key: true, baseLabel: 'Base URL', base: 'https://api.openai.com/v1',
+      models: ['gpt-4o-mini（推荐 · 低成本）', 'gpt-4o', 'gpt-5.5', 'gpt-5.6-terra'],
+      hint: '按 gpt-4o-mini 估算：全量解析 21 个 Skill 约 ¥0.2'
+    },
+    anthropic: {
+      key: true, baseLabel: 'Base URL', base: 'https://api.anthropic.com',
+      models: ['claude-haiku-4-5（推荐 · 低成本）', 'claude-sonnet-4-5', 'claude-opus-4-1'],
+      hint: '按 claude-haiku-4-5 估算：全量解析 21 个 Skill 约 ¥0.4'
+    },
+    ollama: {
+      key: false, baseLabel: '服务地址', base: 'http://localhost:11434',
+      models: ['qwen2.5:7b', 'llama3.1:8b', 'deepseek-r1:14b'],
+      hint: '本地模型免费，但解析质量与速度取决于机器配置'
+    }
+  };
+
+  var fKey = document.getElementById('fKey');
+  var lbBase = document.getElementById('lbBase');
+  var inBase = document.getElementById('inBase');
+  var inModel = document.getElementById('inModel');
+  var costHint = document.getElementById('costHint');
+
+  /* Provider 表单联动 */
+  document.getElementById('providerCards').addEventListener('click', function (e) {
+    var card = e.target.closest('.radio-card');
+    if (!card) return;
+    this.querySelectorAll('.radio-card').forEach(function (c) { c.classList.toggle('active', c === card); });
+    var p = PROVIDERS[card.getAttribute('data-provider')];
+    fKey.style.display = p.key ? '' : 'none';
+    lbBase.textContent = p.baseLabel;
+    inBase.value = p.base;
+    inModel.innerHTML = '';
+    p.models.forEach(function (m) {
+      var o = document.createElement('option');
+      o.textContent = m;
+      inModel.appendChild(o);
+    });
+    costHint.textContent = p.hint;
+    hideResults();
+  });
+
+  function hideResults() {
+    document.getElementById('testOk').hidden = true;
+    document.getElementById('testFail').hidden = true;
+  }
+
+  /* 测试连接 */
+  document.getElementById('btnTest').addEventListener('click', function () {
+    var btn = this;
+    hideResults();
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>连接中…';
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.innerHTML = '';
+      var i = document.createElement('i'); i.setAttribute('data-icon', 'zap'); i.setAttribute('data-size', '14');
+      btn.appendChild(i); btn.appendChild(document.createTextNode('测试连接'));
+      window.ProtoIcons(btn);
+      document.getElementById('testModel').textContent = inModel.value.split('（')[0];
+      document.getElementById('testOk').hidden = false;
+    }, 900);
+  });
+
+  /* 保存 */
+  document.getElementById('btnSave').addEventListener('click', function () {
+    window.showToast({ type: 'success', title: '配置已保存', desc: 'AI 服务可用于 Skill 中文解析' });
+  });
+
+  /* 检查应用更新 */
+  document.getElementById('btnCheckApp').addEventListener('click', function () {
+    window.showToast({ type: 'info', title: '已是最新版本', desc: 'Codex-O v1.0.0' });
+  });
+
+  /* PROTO 演示动作 */
+  window.PROTO_ACTIONS = {
+    failTest: function () {
+      hideResults();
+      document.getElementById('testFail').hidden = false;
+    },
+    onboard: function () {
+      var tip = document.getElementById('onboardTip');
+      tip.hidden = !tip.hidden;
+    }
+  };
+})();
+</script>
+</body>
+</html>
