@@ -1,10 +1,10 @@
 # Codex-O 开发进度
 
-**更新时间**：2026-07-27
-**当前状态**：T0-03 Provider 发现验证已完成，等待 T0-04
+**更新时间**：2026-07-27 19:49
+**当前状态**：T0-04 Keyring 验证已完成
 **当前里程碑**：T0 工程与兼容基线  
-**当前任务**：无，等待 T0-04 启动
-**下一任务**：T0-04 Keyring 验证
+**当前任务**：等待 T0-05 启动
+**下一任务**：T0-05 Codex SQLite 兼容 fixture
 
 ---
 
@@ -16,13 +16,13 @@
 |---|---:|---:|---:|---|
 | 产品基线文档 | 4 份 | 4 份 | 100% | `v1.0-draft`，待评审 |
 | HTML 原型 | 9 页 | 9 页 | 100% | 可作为视觉和交互参考 |
-| 工程实现 | 83 人天 | 4 人天 | 约 4.8% | T0-03 已完成 |
+| 工程实现 | 83 人天 | 4.75 人天 | 约 5.7% | T0-04 已完成 |
 
 ## 2. 里程碑进度
 
 | 里程碑 | 估算 | 已完成 | 进度 | 状态 |
 |---|---:|---:|---:|---|
-| T0 工程与兼容基线 | 6 人天 | 4 人天 | 约 66.7% | 进行中 |
+| T0 工程与兼容基线 | 6 人天 | 4.75 人天 | 约 79.2% | 进行中 |
 | M1 看见与看懂 | 23 人天 | 0 人天 | 0% | 未启动 |
 | M2 可控管理 | 19 人天 | 0 人天 | 0% | 未启动 |
 | M3 会话管理与使用洞察 | 25 人天 | 0 人天 | 0% | 未启动 |
@@ -50,34 +50,33 @@
 - [x] 固定 `prototype/` 原型交付包边界并建立目录级 AI 规范。
 - [x] 建立 Codex-O 自有 SQLite V1 Schema、迁移、备份和只读诊断基线。
 - [x] 建立 User、Repo、Legacy、Plugin 和 Bundled Provider 安全发现基线。
+- [x] 建立系统 Keyring SecretStore、脱敏错误和 macOS 原生凭据验证基线。
 
 ## 4. 当前任务
 
-### T0-03 Provider 发现验证，1.5 人天
+### T0-04 Keyring 验证，0.75 人天
 
 **状态**：完成
 
 目标：
 
-- 建立 Rust Provider 描述、能力与安全发现边界。
-- 验证 User Global、Repo、Legacy User、Plugin 和 Bundled 来源。
-- 证明缺失、损坏、未知结构和符号链接不会越界或阻断其他结果。
+- 建立 Rust SecretStore、稳定错误码和密钥脱敏边界。
+- 验证 macOS Keychain 原生写入、读取、覆盖、删除和失败清理。
+- 验证 Windows Credential Manager 的依赖图与接口选择。
 
 完成标准：
 
-- 隔离 fixture 中正确发现五类来源，绝对路径不进入可展示结果。
-- 真实目录只读探测可复跑，不读取 Skill 正文或修改真实目录。
-- Rust tests 不少于 22，保护文件和数据库模块指纹不变。
+- API Key 不进入 SQLite、日志、前端、Debug、错误文本或 serde DTO。
+- macOS 临时 Keychain 项在任何 probe 结果后均已清理。
+- Rust tests 不少于 33，保护文件、数据库和 Provider 模块指纹不变。
 
 ## 5. 下一步任务
 
 按依赖顺序执行：
 
-1. **T0-04 Keyring 验证，0.75d**
-   - 验证 macOS Keychain 和 Windows Credential Manager 接口。
-2. **T0-05 Codex SQLite 兼容 fixture，1.25d**
+1. **T0-05 Codex SQLite 兼容 fixture，1.25d**
    - 建立脱敏 schema 和关联表测试。
-3. **T0 Gate**
+2. **T0 Gate**
    - Provider、Keyring、SQLite fixture、AppError 和日志脱敏全部通过后进入 M1。
 
 ## 6. 待确认决策
@@ -123,6 +122,51 @@
 - Git 检查点、机器验收和有边界的应用启动验证建立后，才具备 100% AI 持续开发条件。
 
 ## 9. 逐步变更记录
+
+### 2026-07-27 19:49 - T0-04 最终验收与收工
+- 状态：完成
+- 改动：完成 Keyring SecretStore、错误脱敏、macOS 原生 probe、Windows 目标依赖验证和两次实现级反向验证。
+- 原因：为 M1 AI Provider 配置建立系统安全存储边界，避免 API Key 进入普通数据层或可观察输出。
+- 验证：fmt、Rust 34 passed/0 ignored、macOS probe、前端 1 passed、进度检查、Windows native store 依赖图、保护指纹、白名单和敏感扫描全部通过。
+- 进度：T0 4.75/6 人天（约 79.2%）；工程 4.75/83 人天（约 5.7%）；T0-04 完成。
+- 下一步：T0-05 Codex SQLite 兼容 fixture。
+- 风险：Windows 仅完成目标依赖图验证，真实 Credential Manager 冒烟留给跨平台 CI 或 Windows 机器。
+
+### 2026-07-27 19:47 - T0-04 删除与清理反向验证
+- 状态：完成
+- 改动：仅临时将 `SystemSecretStore::delete` 改为 no-op，随后恢复真实 Keyring 删除；probe 和断言未改动。
+- 原因：证明公开删除失效会在删除后读取阶段失败，同时清理 guard 仍直达后端并复查临时项已不存在。
+- 验证：临时 probe 以 `Error: "delete verification failed"` 退出 1，未出现 `cleanup verification failed`；恢复后 probe 全流程成功，Rust 34 passed/0 ignored。
+- 进度：T0 4/6 人天（约 66.7%）；工程 4/83 人天（约 4.8%）；T0-04 实现和反向验证完成。
+- 下一步：执行最终格式、Rust、前端、进度、保护指纹和白名单审计。
+- 风险：无。
+
+### 2026-07-27 19:46 - T0-04 错误脱敏反向验证
+- 状态：完成
+- 改动：仅临时让 `SecretStoreError` 的 Debug 输出测试标记，随后恢复固定 `SecretStoreError(<稳定码>)` 格式；测试文件未改动。
+- 原因：证明后端错误或测试密钥若进入 Debug，现有脱敏断言会立即报警。
+- 验证：临时实现使 `keyring_access_errors_do_not_expose_backend_messages` 以 `left: "fixture-value"`、`right: "SecretStoreError(access_denied)"` 失败；恢复后该测试 1 passed。
+- 进度：T0 4/6 人天（约 66.7%）；工程 4/83 人天（约 4.8%）；T0-04 反向验证进行中。
+- 下一步：仅改公开 delete 路径为 no-op，验证 macOS probe 删除检查和独立清理 guard。
+- 风险：无。
+
+### 2026-07-27 19:45 - T0-04 SecretStore 与原生探针
+- 状态：完成
+- 改动：新增 `secrets` 边界、稳定脱敏错误、Provider 标识校验、隔离 backend 单测和 Keychain probe；仅通过 `keyring::Entry` 访问系统凭据。
+- 原因：让后续 AI Provider 配置可保存 API Key，同时不让密钥进入 SQLite、前端、日志或可观察错误。
+- 验证：Rust 34 passed/0 ignored；macOS probe 完成 set/get/overwrite/delete/not_found 并在退出前复查清理；Windows 依赖图包含 `windows-native-keyring-store v1.1.0`。
+- 进度：T0 4/6 人天（约 66.7%）；工程 4/83 人天（约 4.8%）；T0-04 进入反向验证。
+- 下一步：仅改实现执行错误脱敏和 delete no-op 两次红到绿验证。
+- 风险：Windows 尚未做运行时实测，按既定边界只验证接口与目标依赖图。
+
+### 2026-07-27 19:34 - T0-04 前置复核与开工
+- 状态：进行中
+- 改动：复核 Git、Rust/前端门禁、Keychain 工具、Keyring crate、Rust 工具链和保护指纹；将当前任务切换为 T0-04。
+- 原因：为 API Key 建立系统安全存储边界，不把密钥写入普通数据层或可观察输出。
+- 验证：Rust 25 passed、前端 1 passed；`security` 查询不存在项为 -25300；`keyring 4.1.5` 要求 Rust 1.88；四项保护指纹匹配。
+- 进度：T0 4/6 人天（约 66.7%）；工程 4/83 人天（约 4.8%）；T0-04 进行中。
+- 下一步：加入 Keyring 依赖并实现 SecretStore、SecretValue 和脱敏错误。
+- 风险：本机无 rustup 且 Docker daemon 未运行，Windows 仅可做依赖图和接口级验证，不冒充运行时实测。
 
 ### 2026-07-27 19:17 - T0-03 最终验收与收工
 - 状态：完成
