@@ -1,4 +1,5 @@
 pub mod db;
+pub mod providers;
 
 use tauri::Manager;
 

@@ -1,10 +1,10 @@
 # Codex-O 开发进度
 
 **更新时间**：2026-07-27
-**当前状态**：T0-02 自有 SQLite 与迁移已完成，等待 T0-03
+**当前状态**：T0-03 Provider 发现验证已完成，等待 T0-04
 **当前里程碑**：T0 工程与兼容基线  
-**当前任务**：无，等待 T0-03 启动
-**下一任务**：T0-03 Provider 发现验证
+**当前任务**：无，等待 T0-04 启动
+**下一任务**：T0-04 Keyring 验证
 
 ---
 
@@ -16,13 +16,13 @@
 |---|---:|---:|---:|---|
 | 产品基线文档 | 4 份 | 4 份 | 100% | `v1.0-draft`，待评审 |
 | HTML 原型 | 9 页 | 9 页 | 100% | 可作为视觉和交互参考 |
-| 工程实现 | 83 人天 | 2.5 人天 | 约 3.0% | T0-02 已完成 |
+| 工程实现 | 83 人天 | 4 人天 | 约 4.8% | T0-03 已完成 |
 
 ## 2. 里程碑进度
 
 | 里程碑 | 估算 | 已完成 | 进度 | 状态 |
 |---|---:|---:|---:|---|
-| T0 工程与兼容基线 | 6 人天 | 2.5 人天 | 约 41.7% | 进行中 |
+| T0 工程与兼容基线 | 6 人天 | 4 人天 | 约 66.7% | 进行中 |
 | M1 看见与看懂 | 23 人天 | 0 人天 | 0% | 未启动 |
 | M2 可控管理 | 19 人天 | 0 人天 | 0% | 未启动 |
 | M3 会话管理与使用洞察 | 25 人天 | 0 人天 | 0% | 未启动 |
@@ -49,37 +49,35 @@
 - [x] 建立项目级 AI 协作规范和进度追踪机制。
 - [x] 固定 `prototype/` 原型交付包边界并建立目录级 AI 规范。
 - [x] 建立 Codex-O 自有 SQLite V1 Schema、迁移、备份和只读诊断基线。
+- [x] 建立 User、Repo、Legacy、Plugin 和 Bundled Provider 安全发现基线。
 
 ## 4. 当前任务
 
-### T0-02 自有 SQLite 与迁移，1 人天
+### T0-03 Provider 发现验证，1.5 人天
 
 **状态**：完成
 
 目标：
 
-- 建立 `~/.codex/codex-o/data.db` 的 Rust 内部边界。
-- 实现单调递增、可恢复的 migration runner。
-- 建立 providers、skills、artifact_snapshots、skill_analyses 基础表。
-- 增加损坏数据库、未来版本和迁移失败的只读诊断路径。
+- 建立 Rust Provider 描述、能力与安全发现边界。
+- 验证 User Global、Repo、Legacy User、Plugin 和 Bundled 来源。
+- 证明缺失、损坏、未知结构和符号链接不会越界或阻断其他结果。
 
 完成标准：
 
-- 隔离临时目录可创建并重复打开 version 1 数据库。
-- 旧数据库迁移前备份，失败后原文件不受损。
-- 测试不触碰真实 `~/.codex` 或 Codex 状态库。
+- 隔离 fixture 中正确发现五类来源，绝对路径不进入可展示结果。
+- 真实目录只读探测可复跑，不读取 Skill 正文或修改真实目录。
+- Rust tests 不少于 22，保护文件和数据库模块指纹不变。
 
 ## 5. 下一步任务
 
 按依赖顺序执行：
 
-1. **T0-03 Provider 发现验证，1.5d**
-   - 验证 User、Repo、Legacy、Plugin 和 Bundled Skill 来源。
-2. **T0-04 Keyring 验证，0.75d**
+1. **T0-04 Keyring 验证，0.75d**
    - 验证 macOS Keychain 和 Windows Credential Manager 接口。
-3. **T0-05 Codex SQLite 兼容 fixture，1.25d**
+2. **T0-05 Codex SQLite 兼容 fixture，1.25d**
    - 建立脱敏 schema 和关联表测试。
-4. **T0 Gate**
+3. **T0 Gate**
    - Provider、Keyring、SQLite fixture、AppError 和日志脱敏全部通过后进入 M1。
 
 ## 6. 待确认决策
@@ -97,7 +95,7 @@
 | 风险 | 等级 | 应对 |
 |---|---|---|
 | React Router 上游审计通告存在冲突 | 中 | 当前前端未使用 SSR、data actions 或外部重定向；后续依赖升级前重新审计 |
-| Plugin/Bundled Skill 发现接口未验证 | 高 | T0-03 先做 spike，再冻结 Provider 模型 |
+| Plugin/Bundled cache 目录结构可能变化 | 中 | 按 namespace、manifest 和 skills 动态验证，未知结构降级为 warning |
 | Codex SQLite schema 可能随版本变化 | 高 | 动态探测、fixture、schema gate |
 | 会话删除可能造成索引和文件不一致 | 高 | M3 使用备份、事务、显式关联表和双向回滚 |
 | 原型范围大于阶段实现 | 中 | 未启用能力只展示 Roadmap，不模拟成功 |
@@ -125,6 +123,42 @@
 - Git 检查点、机器验收和有边界的应用启动验证建立后，才具备 100% AI 持续开发条件。
 
 ## 9. 逐步变更记录
+
+### 2026-07-27 19:17 - T0-03 最终验收与收工
+- 状态：完成
+- 改动：完成 Provider descriptor、能力矩阵、五类来源、安全目录扫描、公开发现结果和 System unavailable 诊断。
+- 原因：为 M1 索引提供可观察、只读优先且不泄露绝对路径的来源基线。
+- 验证：Rust 25 passed/0 ignored；前端 1 passed；格式、lint、类型、进度检查、白名单和四项保护指纹全部通过。
+- 进度：T0 4/6 人天（约 66.7%）；工程 4/83 人天（约 4.8%）；T0-03 完成。
+- 下一步：T0-04 Keyring 验证。
+- 风险：System 尚无稳定可验证入口，当前明确返回 unavailable；Plugin cache 未知结构按 warning 降级。
+
+### 2026-07-27 19:13 - T0-03 反向验证
+- 状态：完成
+- 改动：仅临时修改 Provider 实现，分别放开 Repo 写能力和符号链接跟随，测试文件与断言保持不变后完整还原。
+- 原因：证明能力矩阵和路径逃逸保护损坏时会被机器测试发现。
+- 验证：Repo `can_import=true` 时测试以 true/false 断言失败，恢复后 1 passed；跟随链接时逃逸测试以 skills 非空失败，恢复后 1 passed。
+- 进度：T0 2.5/6 人天（约 41.7%）；工程 2.5/83 人天（约 3.0%）；T0-03 进入最终验收。
+- 下一步：运行完整门禁、真实只读探测和白名单审计。
+- 风险：无。
+
+### 2026-07-27 19:12 - T0-03 Provider 边界与来源验证
+- 状态：完成
+- 改动：新增 Provider 类型、能力矩阵、安全目录发现器、Plugin/Bundled cache 适配和 System unavailable 诊断。
+- 原因：为 M1 建立不读取 Skill 正文、不跟随符号链接且不暴露绝对路径的来源边界。
+- 验证：隔离 fixture 覆盖 User/Repo/Legacy/Plugin/Bundled；真实只读计数为 1/0/28/117/4，19 个 manifest，warning 输入含 15 个符号链接；Rust 25 passed。
+- 进度：T0 2.5/6 人天（约 41.7%）；工程 2.5/83 人天（约 3.0%）；T0-03 实现完成、验收进行中。
+- 下一步：执行两次反向验证并运行完整门禁。
+- 风险：Plugin cache 版本目录属于可变输入；当前按 namespace、manifest 和 skills 三项同时满足才识别。
+
+### 2026-07-27 19:05 - T0-03 前置复核与开工
+- 状态：进行中
+- 改动：复核 Git、测试、真实来源只读计数和保护指纹；将当前任务切换为 T0-03。
+- 原因：建立不读取 Skill 正文、不暴露绝对路径的 Provider 发现安全边界。
+- 验证：HEAD 与 origin 均为 `4217a71`、工作区干净；Rust 12 passed、前端 1 passed；来源计数和四项保护指纹匹配。
+- 进度：T0 2.5/6 人天（约 41.7%）；工程 2.5/83 人天（约 3.0%）；T0-03 进行中。
+- 下一步：实现 Provider 类型、路径注入和安全目录发现器。
+- 风险：Plugin/Bundled cache 属于可变输入，未知结构必须降级为 warning，不能硬编码为产品常量。
 
 ### 2026-07-27 17:57 - T0-02 交付审计
 - 状态：完成
