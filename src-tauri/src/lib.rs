@@ -1,4 +1,7 @@
+pub mod app_error;
+pub mod codex_fixture;
 pub mod db;
+pub mod observability;
 pub mod providers;
 pub mod secrets;
 
