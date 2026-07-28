@@ -84,6 +84,7 @@ impl CatalogIndex {
                 parser_version,
                 headings: manifest.headings,
                 resources,
+                snapshot: None,
                 summary: manifest.summary,
             });
         }

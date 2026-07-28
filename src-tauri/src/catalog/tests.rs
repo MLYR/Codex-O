@@ -52,6 +52,89 @@ fn indexed_catalog_fixture() -> (TempDir, ProviderRoots, PathBuf) {
     (temporary, roots, database_path)
 }
 
+#[test]
+fn analysis_metadata_does_not_trigger_a_scan_without_an_index() {
+    let (_temporary, catalog) = catalog_fixture();
+
+    let error = catalog.analysis_metadata("unknown").unwrap_err();
+
+    assert_eq!(error.code, "catalog_unavailable");
+    assert!(catalog.load_catalog().is_none());
+}
+
+#[test]
+fn indexed_analysis_material_revalidates_source_by_stable_id() {
+    let (temporary, roots, database_path) = indexed_catalog_fixture();
+    let directory = write_skill(
+        &temporary.path().join("home/.agents/skills"),
+        "analysis",
+        "# Overview\nPersisted analysis source. See references/guide.md.",
+    );
+    fs::create_dir_all(directory.join("references")).unwrap();
+    fs::write(
+        directory.join("references/guide.md"),
+        "# Guide\nReferenced evidence",
+    )
+    .unwrap();
+    let first = SkillCatalog::with_index_path(roots.clone(), database_path.clone());
+    let skill_id = first.scan_skills().skills[0].id.clone();
+    let restarted = SkillCatalog::with_index_path(roots, database_path);
+
+    let material = restarted.analysis_material(&skill_id).unwrap();
+
+    assert!(material
+        .metadata
+        .snapshot_id
+        .starts_with(&format!("snapshot:{skill_id}:")));
+    assert!(material
+        .sources
+        .iter()
+        .any(|source| source.relative_path == "SKILL.md"
+            && source.content.contains("Persisted analysis source")));
+    assert!(material
+        .sources
+        .iter()
+        .any(|source| source.relative_path == "references/guide.md"
+            && source.content.contains("Referenced evidence")));
+    assert_eq!(
+        material.snapshot.content_hash,
+        material.metadata.content_hash
+    );
+}
+
+#[test]
+fn analysis_material_does_not_read_unreferenced_references() {
+    let (temporary, catalog) = catalog_fixture();
+    let directory = write_skill(
+        &user_root(&temporary),
+        "analysis",
+        "# Overview\nOnly references/selected.md is used.",
+    );
+    fs::create_dir_all(directory.join("references")).unwrap();
+    fs::write(
+        directory.join("references/selected.md"),
+        "selected evidence",
+    )
+    .unwrap();
+    fs::write(
+        directory.join("references/unselected.md"),
+        "unselected evidence",
+    )
+    .unwrap();
+    let skill_id = catalog.scan_skills().skills[0].id.clone();
+
+    let material = catalog.analysis_material(&skill_id).unwrap();
+
+    assert!(material
+        .sources
+        .iter()
+        .any(|source| source.relative_path == "references/selected.md"));
+    assert!(!material
+        .sources
+        .iter()
+        .any(|source| source.relative_path == "references/unselected.md"));
+}
+
 fn write_skill(root: &Path, relative: &str, source: &str) -> PathBuf {
     let directory = root.join(relative);
     fs::create_dir_all(&directory).expect("skill directory");

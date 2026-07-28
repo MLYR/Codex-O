@@ -34,6 +34,7 @@ use preferences::ScanPreferencesStore;
 pub use preferences::ScanPreferences;
 
 const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
+const MAX_ANALYSIS_REFERENCE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct SkillCatalog {
@@ -198,6 +199,79 @@ impl SkillCatalog {
         })
     }
 
+    pub(crate) fn analysis_metadata(
+        &self,
+        skill_id: &str,
+    ) -> Result<SkillAnalysisMetadata, CatalogError> {
+        let snapshot = self
+            .cached_snapshot_from_memory_or_index()
+            .ok_or_else(CatalogError::catalog_unavailable)?;
+        let entry = snapshot
+            .entries
+            .into_iter()
+            .find(|entry| entry.summary.id == skill_id)
+            .ok_or_else(CatalogError::skill_not_found)?;
+        Ok(SkillAnalysisMetadata {
+            snapshot_id: format!("snapshot:{}:{}", entry.summary.id, entry.content_hash),
+            content_hash: entry.content_hash,
+            parser_version: entry.parser_version,
+        })
+    }
+
+    pub(crate) fn analysis_material(
+        &self,
+        skill_id: &str,
+    ) -> Result<SkillAnalysisMaterial, CatalogError> {
+        let snapshot = self
+            .cached_snapshot_from_memory_or_index()
+            .ok_or_else(CatalogError::catalog_unavailable)?;
+        let entry = snapshot
+            .entries
+            .into_iter()
+            .find(|entry| entry.summary.id == skill_id)
+            .ok_or_else(CatalogError::skill_not_found)?;
+        let source_skill = entry.skill.or_else(|| self.discover_skill_by_id(skill_id));
+        let source_skill = source_skill.ok_or_else(CatalogError::analysis_unavailable)?;
+        let source =
+            read_skill_source(&source_skill).map_err(|_| CatalogError::analysis_unavailable())?;
+        let parsed = entry.snapshot.unwrap_or_else(|| {
+            parse_skill(&source_skill)
+                .snapshot
+                .unwrap_or_else(|| ArtifactSnapshot {
+                    skill_id: entry.summary.id.clone(),
+                    content_hash: entry.content_hash.clone(),
+                    parser_version: PARSER_VERSION,
+                    frontmatter: crate::parsing::SkillFrontmatter {
+                        name: Some(entry.summary.display_name.clone()),
+                        description: entry.summary.description.clone(),
+                        extensions: serde_json::Map::new(),
+                    },
+                    headings: entry.headings.clone(),
+                    openai_manifest: None,
+                    resources: entry.resources.clone(),
+                    diagnostics: Vec::new(),
+                })
+        });
+        let mut sources = vec![SkillAnalysisSource {
+            relative_path: SKILL_MARKDOWN_FILE.to_owned(),
+            content: source.clone(),
+        }];
+        sources.extend(referenced_analysis_sources(
+            &source_skill,
+            &parsed.resources,
+            &source,
+        ));
+        Ok(SkillAnalysisMaterial {
+            metadata: SkillAnalysisMetadata {
+                snapshot_id: format!("snapshot:{}:{}", parsed.skill_id, parsed.content_hash),
+                content_hash: parsed.content_hash.clone(),
+                parser_version: parsed.parser_version.to_owned(),
+            },
+            snapshot: parsed,
+            sources,
+        })
+    }
+
     fn cached_scan(&self) -> CatalogScan {
         self.cached_snapshot().to_catalog_scan()
     }
@@ -293,6 +367,7 @@ impl SkillCatalog {
                         .as_ref()
                         .map(|snapshot| snapshot.resources.clone())
                         .unwrap_or_default(),
+                    snapshot: result.snapshot.clone(),
                     summary,
                 }
             })
@@ -353,7 +428,28 @@ struct CatalogEntry {
     parser_version: String,
     headings: Vec<MarkdownHeading>,
     resources: Vec<ResourceEntry>,
+    snapshot: Option<ArtifactSnapshot>,
     summary: SkillSummary,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SkillAnalysisMetadata {
+    pub snapshot_id: String,
+    pub content_hash: String,
+    pub parser_version: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SkillAnalysisMaterial {
+    pub metadata: SkillAnalysisMetadata,
+    pub snapshot: ArtifactSnapshot,
+    pub sources: Vec<SkillAnalysisSource>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SkillAnalysisSource {
+    pub relative_path: String,
+    pub content: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -538,6 +634,20 @@ impl CatalogError {
         Self {
             code: "scan_in_progress",
             message: "A Skill scan is already in progress.",
+        }
+    }
+
+    fn catalog_unavailable() -> Self {
+        Self {
+            code: "catalog_unavailable",
+            message: "Scan Skills before requesting analysis.",
+        }
+    }
+
+    fn analysis_unavailable() -> Self {
+        Self {
+            code: "analysis_source_unavailable",
+            message: "The requested Skill cannot be prepared for analysis.",
         }
     }
 }
@@ -769,6 +879,41 @@ fn skill_modified_at(skill_directory: &Path) -> Option<u64> {
         .and_then(|metadata| metadata.modified().ok())
         .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis() as u64)
+}
+
+fn referenced_analysis_sources(
+    skill: &DiscoveredSkill,
+    resources: &[ResourceEntry],
+    skill_source: &str,
+) -> Vec<SkillAnalysisSource> {
+    resources
+        .iter()
+        .filter(|resource| resource.relative_path.starts_with("references/"))
+        .filter(|resource| {
+            let file_name = resource
+                .relative_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(resource.relative_path.as_str());
+            skill_source.contains(&resource.relative_path) || skill_source.contains(file_name)
+        })
+        .filter_map(|resource| {
+            let path = skill.skill_directory().join(&resource.relative_path);
+            let metadata = fs::symlink_metadata(&path).ok()?;
+            if !metadata.is_file()
+                || metadata.file_type().is_symlink()
+                || metadata.len() > MAX_ANALYSIS_REFERENCE_BYTES
+            {
+                return None;
+            }
+            fs::read_to_string(path)
+                .ok()
+                .map(|content| SkillAnalysisSource {
+                    relative_path: resource.relative_path.clone(),
+                    content,
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]
