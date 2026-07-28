@@ -1,7 +1,7 @@
 //! Runtime settings, secret-safe AI configuration, and environment health.
 
 use std::{
-    fs,
+    fs::{self, OpenOptions},
     io::Write,
     net::IpAddr,
     path::{Path, PathBuf},
@@ -37,6 +37,7 @@ const DEFAULT_TIMEOUT_SECONDS: u64 = 45;
 const MAX_API_KEY_BYTES: usize = 8192;
 const CONFIG_FILE_NAME: &str = "ai-config.json";
 const ADDITIONAL_ROOTS_FILE_NAME: &str = "additional-roots.json";
+static TEMPORARY_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -155,10 +156,14 @@ struct StoredAdditionalRoot {
     path: PathBuf,
 }
 
-pub struct SettingsService {
+struct SettingsStorage {
     config_path: PathBuf,
-    config: RwLock<Option<StoredAiConfig>>,
     additional_roots_path: PathBuf,
+}
+
+pub struct SettingsService {
+    storage: Option<SettingsStorage>,
+    config: RwLock<Option<StoredAiConfig>>,
     additional_roots: RwLock<Vec<StoredAdditionalRoot>>,
     secrets: Arc<dyn SecretStore + Send + Sync>,
     analysis_service: Arc<AnalysisService>,
@@ -181,9 +186,11 @@ impl SettingsService {
         let additional_roots_path = config_path.with_file_name(ADDITIONAL_ROOTS_FILE_NAME);
         let additional_roots = load_additional_roots(&additional_roots_path);
         let service = Self {
-            config_path,
+            storage: Some(SettingsStorage {
+                config_path,
+                additional_roots_path,
+            }),
             config: RwLock::new(config),
-            additional_roots_path,
             additional_roots: RwLock::new(additional_roots),
             secrets,
             analysis_service,
@@ -197,6 +204,29 @@ impl SettingsService {
         service
     }
 
+    pub fn without_storage(
+        secrets: Arc<dyn SecretStore + Send + Sync>,
+        analysis_service: Arc<AnalysisService>,
+        catalog: SkillCatalog,
+        database_status: DatabaseStatus,
+        codex_database_path: Option<PathBuf>,
+    ) -> Self {
+        // Missing app-local storage is a read-only degraded mode, never permission to write elsewhere.
+        let service = Self {
+            storage: None,
+            config: RwLock::new(None),
+            additional_roots: RwLock::new(Vec::new()),
+            secrets,
+            analysis_service,
+            catalog,
+            database_status,
+            codex_database_path,
+            credential_counter: AtomicU64::new(0),
+        };
+        service.refresh_analysis_provider();
+        service
+    }
+
     pub fn get_ai_config(&self) -> AiConfigView {
         self.current_config()
             .map(|config| self.view_for(&config))
@@ -204,9 +234,10 @@ impl SettingsService {
     }
 
     pub fn save_ai_config(&self, input: AiConfigInput) -> Result<AiConfigView, SettingsError> {
+        let storage = self.storage.as_ref().ok_or_else(storage_unavailable)?;
         validate_api_key_input(&input)?;
         let previous = self.current_config();
-        let previous_file = fs::read(&self.config_path).ok();
+        let previous_file = fs::read(&storage.config_path).ok();
         let previous_slot = previous
             .as_ref()
             .and_then(|config| config.credential_slot.clone());
@@ -235,11 +266,14 @@ impl SettingsService {
             credential_slot,
         };
 
-        if let Err(error) = self.validate_stored_config(&next) {
+        // Clear is an explicit request to retain non-secret settings in a disabled remote state.
+        if let Err(error) =
+            self.validate_stored_config(&next, input.secret_action == AiSecretAction::Clear)
+        {
             self.cleanup_created_slot(created_slot.as_deref());
             return Err(error);
         }
-        if write_config(&self.config_path, &next).is_err() {
+        if write_config(&storage.config_path, &next).is_err() {
             self.cleanup_created_slot(created_slot.as_deref());
             return Err(storage_unavailable());
         }
@@ -248,7 +282,7 @@ impl SettingsService {
             if let Some(slot) = previous_slot.as_deref() {
                 if let Err(error) = self.secrets.delete(&secret_id(slot)?) {
                     if error.code != SecretStoreErrorCode::NotFound {
-                        restore_config(&self.config_path, previous_file.as_deref());
+                        restore_config(&storage.config_path, previous_file.as_deref());
                         self.cleanup_created_slot(created_slot.as_deref());
                         return Err(secret_unavailable());
                     }
@@ -266,6 +300,9 @@ impl SettingsService {
 
     pub async fn test_ai_connection(&self) -> Result<ConnectionTestResult, SettingsError> {
         let config = self.current_config().ok_or_else(ai_not_configured)?;
+        if !self.has_required_secret(&config) {
+            return Err(secret_required());
+        }
         if privacy_blocks_remote(&config) {
             return Ok(ConnectionTestResult {
                 status: ConnectionStatus::Blocked,
@@ -320,6 +357,7 @@ impl SettingsService {
         &self,
         selected_path: PathBuf,
     ) -> Result<Vec<AdditionalRootView>, SettingsError> {
+        let storage = self.storage.as_ref().ok_or_else(storage_unavailable)?;
         let canonical = self.validate_additional_root_path(&selected_path)?;
         let mut roots = self
             .additional_roots
@@ -335,7 +373,7 @@ impl SettingsService {
         let mut updated = roots.clone();
         updated.push(next);
         updated.sort_by(|left, right| left.id.cmp(&right.id));
-        write_additional_roots(&self.additional_roots_path, &updated)
+        write_additional_roots(&storage.additional_roots_path, &updated)
             .map_err(|_| storage_unavailable())?;
         self.catalog.set_additional_roots(
             updated
@@ -351,6 +389,7 @@ impl SettingsService {
         &self,
         root_id: &str,
     ) -> Result<Vec<AdditionalRootView>, SettingsError> {
+        let storage = self.storage.as_ref().ok_or_else(storage_unavailable)?;
         if root_id.is_empty()
             || root_id.len() > 64
             || !root_id.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -369,7 +408,7 @@ impl SettingsService {
             .filter(|root| root.id != root_id)
             .cloned()
             .collect::<Vec<_>>();
-        write_additional_roots(&self.additional_roots_path, &updated)
+        write_additional_roots(&storage.additional_roots_path, &updated)
             .map_err(|_| storage_unavailable())?;
         self.catalog.set_additional_roots(
             updated
@@ -404,16 +443,23 @@ impl SettingsService {
         }
     }
 
-    fn validate_stored_config(&self, config: &StoredAiConfig) -> Result<(), SettingsError> {
-        if requires_secret(config.kind)
-            && !config
-                .credential_slot
-                .as_deref()
-                .is_some_and(|slot| self.secret_exists(slot))
-        {
+    fn validate_stored_config(
+        &self,
+        config: &StoredAiConfig,
+        allow_missing_secret: bool,
+    ) -> Result<(), SettingsError> {
+        if !allow_missing_secret && !self.has_required_secret(config) {
             return Err(secret_required());
         }
         self.provider_for(config).map(|_| ())
+    }
+
+    fn has_required_secret(&self, config: &StoredAiConfig) -> bool {
+        !requires_secret(config.kind)
+            || config
+                .credential_slot
+                .as_deref()
+                .is_some_and(|slot| self.secret_exists(slot))
     }
 
     fn provider_for(&self, config: &StoredAiConfig) -> Result<Arc<dyn AiProvider>, SettingsError> {
@@ -438,7 +484,8 @@ impl SettingsService {
 
     fn refresh_analysis_provider(&self) {
         let provider = self.current_config().and_then(|config| {
-            (!privacy_blocks_remote(&config))
+            // A cleared remote credential keeps editable settings but must never enable requests.
+            (self.has_required_secret(&config) && !privacy_blocks_remote(&config))
                 .then(|| self.provider_for(&config).ok())
                 .flatten()
         });
@@ -455,6 +502,14 @@ impl SettingsService {
             );
         };
         let Some(slot) = config.credential_slot.as_deref() else {
+            if requires_secret(config.kind) {
+                return health(
+                    "keyring",
+                    HealthStatus::Error,
+                    "keyring_secret_missing",
+                    "Replace the API key in Settings.",
+                );
+            }
             return health(
                 "keyring",
                 HealthStatus::Ready,
@@ -723,11 +778,29 @@ fn restore_config(path: &Path, previous: Option<&[u8]>) {
 fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<(), ()> {
     let parent = path.parent().ok_or(())?;
     fs::create_dir_all(parent).map_err(|_| ())?;
-    let temporary = parent.join(".ai-config.json.tmp");
-    let mut file = fs::File::create(&temporary).map_err(|_| ())?;
-    file.write_all(bytes).map_err(|_| ())?;
-    file.sync_all().map_err(|_| ())?;
-    fs::rename(temporary, path).map_err(|_| ())
+    let nonce = TEMPORARY_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = temporary_path(path, nonce)?;
+    // create_new plus a per-write nonce prevents concurrent settings files from sharing a staging file.
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| ())?;
+        file.write_all(bytes).map_err(|_| ())?;
+        file.sync_all().map_err(|_| ())?;
+        fs::rename(&temporary, path).map_err(|_| ())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn temporary_path(path: &Path, nonce: u64) -> Result<PathBuf, ()> {
+    let parent = path.parent().ok_or(())?;
+    let file_name = path.file_name().and_then(|name| name.to_str()).ok_or(())?;
+    Ok(parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce)))
 }
 
 fn validate_api_key_input(input: &AiConfigInput) -> Result<(), SettingsError> {
@@ -1224,6 +1297,35 @@ mod tests {
     }
 
     #[test]
+    fn clearing_a_remote_key_preserves_settings_and_disables_requests() {
+        let fixture = Fixture::new();
+        fixture
+            .service
+            .save_ai_config(remote_input(AiSecretAction::Replace, Some("fixture-key")))
+            .unwrap();
+
+        let view = fixture
+            .service
+            .save_ai_config(remote_input(AiSecretAction::Clear, None))
+            .unwrap();
+        let connection_error = runtime()
+            .block_on(fixture.service.test_ai_connection())
+            .unwrap_err();
+
+        assert!(view.configured);
+        assert!(!view.has_api_key);
+        assert!(fixture.secrets.values.lock().unwrap().is_empty());
+        assert!(!fixture.service.analysis_service.is_configured());
+        assert_eq!(connection_error.code, SettingsErrorCode::SecretRequired);
+        assert!(fixture
+            .service
+            .get_environment_health()
+            .items
+            .iter()
+            .any(|item| item.code == "keyring_secret_missing"));
+    }
+
+    #[test]
     fn secret_write_failure_preserves_the_old_config_and_key() {
         let fixture = Fixture::new();
         let old = fixture
@@ -1260,8 +1362,9 @@ mod tests {
             .service
             .save_ai_config(remote_input(AiSecretAction::Replace, Some("old-key")))
             .unwrap();
-        fs::remove_file(&fixture.service.config_path).unwrap();
-        fs::create_dir(&fixture.service.config_path).unwrap();
+        let config_path = &fixture.service.storage.as_ref().unwrap().config_path;
+        fs::remove_file(config_path).unwrap();
+        fs::create_dir(config_path).unwrap();
 
         let error = fixture
             .service
@@ -1271,6 +1374,50 @@ mod tests {
         assert_eq!(error.code, SettingsErrorCode::StorageUnavailable);
         assert_eq!(fixture.service.get_ai_config(), old);
         assert_eq!(fixture.secrets.values.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn unavailable_app_storage_rejects_writes_before_touching_keyring() {
+        let fixture = Fixture::new();
+        let service = SettingsService::without_storage(
+            fixture.secrets.clone(),
+            Arc::clone(&fixture.service.analysis_service),
+            fixture.service.catalog.clone(),
+            fixture.service.database_status,
+            None,
+        );
+
+        let error = service
+            .save_ai_config(remote_input(AiSecretAction::Replace, Some("fixture-key")))
+            .unwrap_err();
+
+        assert_eq!(error.code, SettingsErrorCode::StorageUnavailable);
+        assert!(fixture.secrets.values.lock().unwrap().is_empty());
+        assert!(!service.get_ai_config().configured);
+    }
+
+    #[test]
+    fn atomic_writes_use_distinct_target_specific_temporary_paths() {
+        let directory = TempDir::new().unwrap();
+        let config = directory.path().join(CONFIG_FILE_NAME);
+        let roots = directory.path().join(ADDITIONAL_ROOTS_FILE_NAME);
+
+        let config_temporary = temporary_path(&config, 7).unwrap();
+        let roots_temporary = temporary_path(&roots, 7).unwrap();
+        let next_config_temporary = temporary_path(&config, 8).unwrap();
+
+        assert_ne!(config_temporary, roots_temporary);
+        assert_ne!(config_temporary, next_config_temporary);
+        assert!(config_temporary
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(CONFIG_FILE_NAME));
+        assert!(roots_temporary
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(ADDITIONAL_ROOTS_FILE_NAME));
     }
 
     #[test]

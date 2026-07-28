@@ -9,7 +9,7 @@ pub mod providers;
 pub mod secrets;
 pub mod settings;
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use tauri::Manager;
 
@@ -80,8 +80,8 @@ pub fn run() {
                     ))
                 })
                 .unwrap_or_else(|| {
-                    Arc::new(settings::SettingsService::new(
-                        PathBuf::from("ai-config.json"),
+                    // App-local path resolution failure keeps settings read-only instead of escaping to cwd.
+                    Arc::new(settings::SettingsService::without_storage(
                         settings::system_secret_store(),
                         Arc::clone(&analysis_service),
                         catalog.clone(),
