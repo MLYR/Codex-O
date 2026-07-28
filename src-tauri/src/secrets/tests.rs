@@ -97,13 +97,10 @@ fn cleanup_removes_a_fixture_credential_after_a_failed_operation() {
         .set(&identifier, SecretValue::new("fixture-value"))
         .unwrap();
 
-    let failed_operation: Result<(), SecretStoreError> = Err(SecretStoreError {
+    let failed_operation = SecretStoreError {
         code: SecretStoreErrorCode::Unavailable,
-    });
-    assert_eq!(
-        failed_operation.unwrap_err().code,
-        SecretStoreErrorCode::Unavailable
-    );
+    };
+    assert_eq!(failed_operation.code, SecretStoreErrorCode::Unavailable);
     cleanup_secret(&store, &identifier);
 
     assert!(!store.exists(&identifier).unwrap());

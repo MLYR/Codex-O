@@ -32,21 +32,21 @@ fn run_probe(
     store: &SystemSecretStore,
     provider_id: &ProviderSecretId,
 ) -> Result<(), Box<dyn Error>> {
-    let _ = store.delete(&provider_id);
-    store.set(&provider_id, SecretValue::new("codex-o-probe-initial"))?;
+    let _ = store.delete(provider_id);
+    store.set(provider_id, SecretValue::new("codex-o-probe-initial"))?;
     ensure_matches(
-        store.get(&provider_id)?,
+        store.get(provider_id)?,
         SecretValue::new("codex-o-probe-initial"),
     )?;
 
-    store.set(&provider_id, SecretValue::new("codex-o-probe-overwrite"))?;
+    store.set(provider_id, SecretValue::new("codex-o-probe-overwrite"))?;
     ensure_matches(
-        store.get(&provider_id)?,
+        store.get(provider_id)?,
         SecretValue::new("codex-o-probe-overwrite"),
     )?;
 
-    store.delete(&provider_id)?;
-    match store.get(&provider_id) {
+    store.delete(provider_id)?;
+    match store.get(provider_id) {
         Err(error) if error.code == SecretStoreErrorCode::NotFound => {}
         _ => return Err("delete verification failed".into()),
     }

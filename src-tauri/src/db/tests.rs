@@ -44,7 +44,7 @@ fn new_database_creates_v1_schema() {
 #[test]
 fn v1_schema_matches_design_columns() {
     let fixture = DatabaseFixture::new();
-    drop(initialize(fixture.database_path.clone()));
+    let _database = initialize(fixture.database_path.clone());
 
     assert_eq!(
         fixture.table_columns("providers"),
@@ -107,7 +107,7 @@ fn v1_schema_matches_design_columns() {
 #[test]
 fn repeated_initialization_is_idempotent() {
     let fixture = DatabaseFixture::new();
-    drop(initialize(fixture.database_path.clone()));
+    let _database = initialize(fixture.database_path.clone());
     let first_bytes = fs::read(&fixture.database_path).unwrap();
 
     let database = initialize(fixture.database_path.clone());
@@ -125,7 +125,7 @@ fn repeated_initialization_is_idempotent() {
 #[test]
 fn unique_provider_relative_path_is_enforced() {
     let fixture = DatabaseFixture::new();
-    drop(initialize(fixture.database_path.clone()));
+    let _database = initialize(fixture.database_path.clone());
     let connection = fixture.open_configured();
     insert_provider(&connection);
     insert_skill(&connection, "skill-a", "shared/path").unwrap();
@@ -139,7 +139,7 @@ fn unique_provider_relative_path_is_enforced() {
 #[test]
 fn foreign_keys_are_enabled_and_enforced() {
     let fixture = DatabaseFixture::new();
-    drop(initialize(fixture.database_path.clone()));
+    let _database = initialize(fixture.database_path.clone());
     let connection = fixture.open_configured();
     let enabled: u32 = connection
         .pragma_query_value(None, "foreign_keys", |row| row.get(0))
@@ -215,7 +215,7 @@ fn backup_name_collision_does_not_overwrite_existing_backup() {
         .join("data.db.pre-v0.bak");
     fs::write(&existing_backup, b"keep this backup").unwrap();
 
-    drop(initialize(fixture.database_path.clone()));
+    let _database = initialize(fixture.database_path.clone());
 
     assert_eq!(fs::read(&existing_backup).unwrap(), b"keep this backup");
     assert_eq!(fixture.backup_paths().len(), 2);

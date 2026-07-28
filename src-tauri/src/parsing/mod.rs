@@ -163,10 +163,7 @@ fn read_text_file(
     relative_path: &str,
     diagnostics: &mut Vec<ParseDiagnostic>,
 ) -> Option<String> {
-    let metadata = match regular_file_metadata(path, relative_path, diagnostics) {
-        Some(metadata) => metadata,
-        None => return None,
-    };
+    let metadata = regular_file_metadata(path, relative_path, diagnostics)?;
     if metadata.len() > MAX_TEXT_BYTES {
         diagnose(
             diagnostics,

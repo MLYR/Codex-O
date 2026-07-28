@@ -255,6 +255,19 @@ describe("SkillDetailPage", () => {
     expect(screen.queryByTestId("skill-source")).toBeNull();
   });
 
+  it("keeps static detail available when cached analysis cannot be read", async () => {
+    vi.mocked(skillCatalogApi.getSkillAnalysis).mockRejectedValue({
+      code: "provider_unavailable",
+      message: "AI provider unavailable.",
+    });
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Review" })).not.toBeNull();
+    expect(screen.getByText("Review code safely")).not.toBeNull();
+    expect(screen.getByText("无法读取缓存护照，静态详情仍可使用。")).not.toBeNull();
+    expect(screen.queryByTestId("skill-source")).toBeNull();
+  });
+
   it("renders a complete cached passport with risk and uncertainty states", async () => {
     vi.mocked(skillCatalogApi.getSkillAnalysis).mockResolvedValue(readyAnalysis);
     renderPage();

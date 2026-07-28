@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
-    "check": "npm run lint && npm run typecheck && npm test -- --run && node scripts/check-progress.mjs PROGRESS.md"
+    "check": "npm run lint && npm run typecheck && npm test -- --run && node scripts/check-progress.mjs PROGRESS.md",
+    "check:m1": "CODEX_O_M1_GATE_OUTPUT=target/m1-beta/m1-gate.json CODEX_O_M1_REAL_BETA=1 CODEX_O_M1_REPO_ROOT=.. cargo test --manifest-path src-tauri/Cargo.toml m1_gate::write_m1_gate_report -- --exact --nocapture && node scripts/check-m1-gate.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

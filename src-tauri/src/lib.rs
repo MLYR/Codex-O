@@ -9,6 +9,9 @@ pub mod providers;
 pub mod secrets;
 pub mod settings;
 
+#[cfg(test)]
+mod m1_gate;
+
 use std::sync::Arc;
 
 use tauri::Manager;

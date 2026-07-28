@@ -209,14 +209,6 @@ impl AdditionalRoot {
 
         Some(Self { id, directory })
     }
-
-    pub(crate) fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub(crate) fn directory(&self) -> &Path {
-        &self.directory
-    }
 }
 
 pub struct ProviderRegistry {

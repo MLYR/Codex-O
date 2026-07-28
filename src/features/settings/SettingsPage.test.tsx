@@ -124,6 +124,28 @@ describe("SettingsPage", () => {
     expect((keyInput as HTMLInputElement).value).toBe("");
   });
 
+  it("sends an explicit clear action for an existing remote key", async () => {
+    vi.mocked(settingsApi.getAiConfig).mockResolvedValue({
+      ...aiConfig,
+      configured: true,
+      has_api_key: true,
+    });
+    render(<SettingsPage />);
+    const clearButton = await screen.findByRole("button", { name: "清除" });
+
+    fireEvent.click(clearButton);
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => {
+      expect(settingsApi.saveAiConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          secretAction: "clear",
+          apiKey: undefined,
+        }),
+      );
+    });
+  });
+
   it("saves privacy mode as part of the active AI configuration", async () => {
     render(<SettingsPage />);
     const privacy = await screen.findByRole("switch", { name: "隐私模式" });
