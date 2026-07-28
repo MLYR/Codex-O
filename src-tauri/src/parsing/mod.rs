@@ -8,7 +8,7 @@ use std::{
 };
 
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -47,7 +47,7 @@ pub struct SkillFrontmatter {
     pub extensions: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MarkdownHeading {
     pub level: u8,
     pub text: String,
@@ -63,7 +63,7 @@ pub struct OpenAiManifest {
     pub extensions: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ResourceEntry {
     pub relative_path: String,
     pub size_bytes: u64,
@@ -140,6 +140,22 @@ pub fn parse_skill(skill: &DiscoveredSkill) -> ParseResult {
         snapshot: Some(snapshot),
         diagnostics,
     }
+}
+
+pub(crate) fn read_skill_source(skill: &DiscoveredSkill) -> Result<String, ParseDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let source = read_text_file(
+        &skill.skill_directory().join(SKILL_MARKDOWN_FILE),
+        SKILL_MARKDOWN_FILE,
+        &mut diagnostics,
+    );
+
+    source.ok_or_else(|| {
+        diagnostics.into_iter().next().unwrap_or(ParseDiagnostic {
+            code: ParseDiagnosticCode::EntryUnreadable,
+            relative_path: SKILL_MARKDOWN_FILE.to_owned(),
+        })
+    })
 }
 
 fn read_text_file(

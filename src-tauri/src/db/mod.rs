@@ -8,7 +8,6 @@ use std::{
 use migrations::{apply_migrations, Migration, CURRENT_SCHEMA_VERSION, MIGRATIONS};
 use rusqlite::{Connection, OpenFlags};
 
-const DATABASE_DIRECTORY: &str = ".codex/codex-o";
 const DATABASE_FILE_NAME: &str = "data.db";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,10 +51,8 @@ pub enum DatabaseStatus {
     Diagnostic(DatabaseDiagnostic),
 }
 
-pub fn database_path(home_directory: &Path) -> PathBuf {
-    home_directory
-        .join(DATABASE_DIRECTORY)
-        .join(DATABASE_FILE_NAME)
+pub fn database_path(app_local_data_directory: &Path) -> PathBuf {
+    app_local_data_directory.join(DATABASE_FILE_NAME)
 }
 
 pub fn initialize(database_path: PathBuf) -> AppDatabase {

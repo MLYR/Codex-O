@@ -3,14 +3,14 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
 const PLUGIN_MANIFEST_DIRECTORY: &str = ".codex-plugin";
 const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
 const PLUGIN_SKILLS_DIRECTORY: &str = "skills";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     UserGlobal,
@@ -22,7 +22,7 @@ pub enum ProviderKind {
     AdditionalRoot,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct ProviderCapabilities {
     pub can_read: bool,
     pub can_import: bool,
@@ -152,6 +152,7 @@ pub struct ProviderRoots {
     pub repository_directory: PathBuf,
     pub plugin_cache_directory: PathBuf,
     pub additional_roots: Vec<AdditionalRoot>,
+    pub include_plugin_cache: bool,
 }
 
 impl ProviderRoots {
@@ -165,11 +166,17 @@ impl ProviderRoots {
             repository_directory,
             plugin_cache_directory,
             additional_roots: Vec::new(),
+            include_plugin_cache: true,
         }
     }
 
     pub fn with_additional_roots(mut self, additional_roots: Vec<AdditionalRoot>) -> Self {
         self.additional_roots = additional_roots;
+        self
+    }
+
+    pub fn with_plugin_cache_enabled(mut self, enabled: bool) -> Self {
+        self.include_plugin_cache = enabled;
         self
     }
 }
@@ -202,6 +209,7 @@ pub struct ProviderRegistry {
     repo: DirectoryProvider,
     legacy_user: DirectoryProvider,
     plugin_cache: PluginCacheProvider,
+    plugin_cache_enabled: bool,
     additional_roots: Vec<DirectoryProvider>,
 }
 
@@ -235,6 +243,7 @@ impl ProviderRegistry {
                 roots.home_directory.join(".codex/skills"),
             ),
             plugin_cache: PluginCacheProvider::new(roots.plugin_cache_directory),
+            plugin_cache_enabled: roots.include_plugin_cache,
             additional_roots,
         }
     }
@@ -245,7 +254,9 @@ impl ProviderRegistry {
         discovery.extend(self.user_global.discover());
         discovery.extend(self.repo.discover());
         discovery.extend(self.legacy_user.discover());
-        discovery.extend(self.plugin_cache.discover());
+        if self.plugin_cache_enabled {
+            discovery.extend(self.plugin_cache.discover());
+        }
         for additional_root in &self.additional_roots {
             discovery.extend(additional_root.discover());
         }

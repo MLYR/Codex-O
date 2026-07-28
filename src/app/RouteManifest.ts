@@ -94,7 +94,7 @@ export const routeManifest: readonly AppRoute[] = [
     id: "Settings",
     path: "/settings",
     title: "设置",
-    phase: "M2",
+    phase: "M1",
     group: "系统",
     icon: Settings,
   },

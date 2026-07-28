@@ -17,11 +17,11 @@ const REQUIRED_TABLES: &[&str] = &[
 ];
 
 #[test]
-fn database_path_is_scoped_to_home() {
-    let home = Path::new("/isolated-home");
+fn database_path_is_scoped_to_app_local_data() {
+    let app_local_data = Path::new("/isolated-app-data");
     assert_eq!(
-        database_path(home),
-        home.join(".codex").join("codex-o").join("data.db")
+        database_path(app_local_data),
+        app_local_data.join("data.db")
     );
 }
 
@@ -174,6 +174,37 @@ fn existing_v0_database_is_backed_up_before_migration() {
 }
 
 #[test]
+fn v2_database_is_backed_up_and_preserves_legacy_tables_during_v3_upgrade() {
+    let fixture = DatabaseFixture::new();
+    fixture.create_v2_database();
+    let original_bytes = fs::read(&fixture.database_path).unwrap();
+
+    let database = initialize(fixture.database_path.clone());
+
+    assert_eq!(
+        database.status(),
+        DatabaseStatus::Ready {
+            schema_version: CURRENT_SCHEMA_VERSION
+        }
+    );
+    assert_eq!(fixture.user_version(), CURRENT_SCHEMA_VERSION);
+    assert_eq!(fixture.v2_config_value(), "preserved-config");
+    assert_eq!(fixture.v2_summary_value(), "preserved-summary");
+    assert_eq!(fixture.backup_paths().len(), 1);
+    assert_eq!(
+        fs::read(&fixture.backup_paths()[0]).unwrap(),
+        original_bytes
+    );
+    assert!(fixture
+        .table_names()
+        .iter()
+        .all(|table| REQUIRED_TABLES.contains(&table.as_str())
+            || table == "ai_config"
+            || table == "skill_ai_summaries"));
+    assert!(fixture.table_names().iter().any(|table| table == "skills"));
+}
+
+#[test]
 fn backup_name_collision_does_not_overwrite_existing_backup() {
     let fixture = DatabaseFixture::new();
     fixture.create_legacy_database();
@@ -241,7 +272,9 @@ fn corrupt_database_is_preserved_in_diagnostic_mode() {
 fn future_schema_version_is_preserved_in_diagnostic_mode() {
     let fixture = DatabaseFixture::new();
     let connection = Connection::open(&fixture.database_path).unwrap();
-    connection.pragma_update(None, "user_version", 2).unwrap();
+    connection
+        .pragma_update(None, "user_version", CURRENT_SCHEMA_VERSION + 1)
+        .unwrap();
     connection
         .execute("CREATE TABLE future(id INTEGER)", [])
         .unwrap();
@@ -296,9 +329,50 @@ impl DatabaseFixture {
             .unwrap();
     }
 
+    fn create_v2_database(&self) {
+        let connection = self.open();
+        connection
+            .execute(
+                "CREATE TABLE ai_config(id INTEGER PRIMARY KEY, value TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "CREATE TABLE skill_ai_summaries(id INTEGER PRIMARY KEY, value TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO ai_config(value) VALUES ('preserved-config')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO skill_ai_summaries(value) VALUES ('preserved-summary')",
+                [],
+            )
+            .unwrap();
+        connection.pragma_update(None, "user_version", 2).unwrap();
+    }
+
     fn legacy_value(&self) -> String {
         self.open()
             .query_row("SELECT value FROM legacy", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn v2_config_value(&self) -> String {
+        self.open()
+            .query_row("SELECT value FROM ai_config", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    fn v2_summary_value(&self) -> String {
+        self.open()
+            .query_row("SELECT value FROM skill_ai_summaries", [], |row| row.get(0))
             .unwrap()
     }
 

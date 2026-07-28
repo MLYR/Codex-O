@@ -23,18 +23,17 @@ export function Sidebar({ activeRoute }: SidebarProps) {
           <section className="nav-group" key={group} aria-label={group}>
             <span className="nav-label">{group}</span>
             {routeManifest
-              .filter((route) => route.group === group)
+              .filter((route) => route.group === group && route.id !== "SkillDetail")
               .map((route) => {
                 const Icon = route.icon;
-                const isDetail = route.id === "SkillDetail";
 
                 return (
                   <NavLink
                     className="nav-link"
                     key={route.id}
-                    to={isDetail ? "/skills/example" : route.path}
+                    to={route.path}
                     aria-label={route.title}
-                    end={!isDetail}
+                    end
                   >
                     <Icon className="nav-icon" size={16} strokeWidth={1.75} />
                     <span>{route.title}</span>
