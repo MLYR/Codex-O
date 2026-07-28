@@ -487,7 +487,7 @@ fn plugin_cache_scanning_is_disabled_by_default_and_persists_when_enabled() {
     let before_setting_change = catalog.load_catalog();
 
     let enabled_preferences = catalog
-        .update_scan_preferences(true)
+        .update_scan_preferences(true, true)
         .expect("enable plugin scanning");
     assert_eq!(catalog.load_catalog(), before_setting_change);
     let enabled = catalog.scan_skills();
@@ -506,7 +506,7 @@ fn plugin_cache_scanning_is_disabled_by_default_and_persists_when_enabled() {
     assert_eq!(restarted.scan_skills().skills.len(), 1);
     assert_eq!(
         stored,
-        r#"{"include_plugin_cache":true,"initial_scan_notice_seen":false}"#
+        r#"{"include_plugin_cache":true,"include_bundled_cache":true,"initial_scan_notice_seen":false}"#
     );
     assert!(!stored.contains(temporary.path().to_str().expect("UTF-8 fixture path")));
 }

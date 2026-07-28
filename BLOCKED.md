@@ -1,10 +1,12 @@
 # Codex-O 阻塞与待裁决
 
+**基线差异原始输出**：`status=* main...origin/main（clean — nothing to commit）`；`head=246bcb7531c2e7aff48d3fdeb1f405bd37b145a5`；`origin=246bcb7531c2e7aff48d3fdeb1f405bd37b145a5`；任务书预期 `origin/main=d04bb5f` 且 main ahead 1。
+
 **基线差异原始输出**：`head=14334b742369d51c8c77512cd9db576c1a7f1975`；`origin=14334b742369d51c8c77512cd9db576c1a7f1975`；任务书预期 origin 为 `4217a71`。
 
 **基线差异原始输出**：`head=4217a711f9d29d9d588a5ffe7c816285585bfde1`；`origin=4217a711f9d29d9d588a5ffe7c816285585bfde1`；任务书预期 origin 为 `7fb46b7`。
 
-**更新时间**：2026-07-28 17:07
+**更新时间**：2026-07-28 18:59
 
 本文件只记录会阻止任务继续或改变产品、技术、安全边界的问题。普通待办写入
 `PROGRESS.md`，稳定结论写入对应权威文档。
@@ -12,6 +14,16 @@
 ## 当前阻塞
 
 无。
+
+### B-006 M1-S5/M1-S6 远端基线已前进
+
+- 状态：已解除
+- 问题：任务书预期 `HEAD=246bcb7`、`origin/main=d04bb5f` 且 main ahead 1，实测本地与远端均为 `246bcb7531c2e7aff48d3fdeb1f405bd37b145a5`。
+- 证据：工作区初始状态 clean；HEAD 与目标源码提交一致，仅 `origin/main` 已前进。
+- 影响：停止远端 Git 操作；不影响以同一源码提交继续本地实现和验证。
+- 已尝试：只读复核工作区、HEAD 和 `origin/main`，未执行 fetch、pull、reset、checkout 或其他远端操作。
+- 建议：以共同提交 `246bcb7` 作为本目标实际源码基线，继续本地白名单内工作。
+- 解除条件：已满足；本地和远端源码一致且工作区初始干净。
 
 ### B-005 Codex 配置目录数据库冲突
 
@@ -40,6 +52,8 @@ M1-S3.9 首次手动后台扫描收工结论：无。
 M1-S3.10 自有数据目录隔离收工结论：无。
 
 M1-S4 AI 分析引擎收工结论：无。
+
+M1-S5/M1-S6 收工结论：无。
 
 ### B-004 T0-04 远端基线已前进
 

@@ -95,3 +95,150 @@ export interface CatalogError {
   code: string;
   message: string;
 }
+
+export type AnalysisRunStatus =
+  | "not_requested"
+  | "not_configured"
+  | "ready"
+  | "stale"
+  | "failed"
+  | "degraded";
+
+export interface RedactionCounts {
+  api_keys: number;
+  authorization_headers: number;
+  private_keys: number;
+  secret_fields: number;
+  home_paths: number;
+}
+
+export interface ResourceSummary {
+  relativePath: string;
+  kind: string;
+  summary: string;
+}
+
+export interface RiskItem {
+  category: string;
+  severity: "low" | "medium" | "high";
+  description: string;
+}
+
+export interface EvidenceRef {
+  sectionId: string;
+  relativePath: string;
+  lineStart: number;
+  lineEnd: number;
+}
+
+export interface SkillPassport {
+  summary: string;
+  capabilities: string[];
+  triggerExamples: string[];
+  suitableWhen: string[];
+  avoidWhen: string[];
+  workflow: string[];
+  prerequisites: string[];
+  resources: ResourceSummary[];
+  sideEffects: string[];
+  risks: RiskItem[];
+  relatedHints: string[];
+  confidence: "high" | "medium" | "low";
+  evidenceRefs: EvidenceRef[];
+  uncertainties: string[];
+}
+
+export interface SentSection {
+  id: string;
+  relative_path: string;
+  line_start: number;
+  line_end: number;
+  title: string;
+}
+
+export interface EvidenceLink {
+  id: string;
+  relative_path: string;
+  line_start: number;
+  line_end: number;
+}
+
+export interface AnalysisView {
+  skill_id: string;
+  analysis_key?: string;
+  status: AnalysisRunStatus;
+  passport?: SkillPassport;
+  provider?: string;
+  model?: string;
+  language?: string;
+  analyzed_at_ms?: number;
+  cache_hit: boolean;
+  stale: boolean;
+  degraded: boolean;
+  redactions: RedactionCounts;
+  sent_sections: SentSection[];
+  evidence: EvidenceLink[];
+  diagnostics: string[];
+}
+
+export interface EvidenceLine {
+  number: number;
+  text: string;
+}
+
+export interface EvidenceExcerpt {
+  evidence_id: string;
+  relative_path: string;
+  line_start: number;
+  line_end: number;
+  lines: EvidenceLine[];
+}
+
+export interface AnalysisEnqueueResult {
+  job_id?: string;
+  status:
+    | "queued"
+    | "running"
+    | "ready"
+    | "stale"
+    | "failed"
+    | "degraded"
+    | "not_configured";
+  deduplicated: boolean;
+}
+
+export interface AnalysisProgress {
+  jobs: Array<{
+    job_id: string;
+    skill_id: string;
+    analysis_key?: string;
+    status:
+      | "queued"
+      | "running"
+      | "ready"
+      | "stale"
+      | "failed"
+      | "degraded"
+      | "not_configured";
+  }>;
+}
+
+export interface ComparisonSkill {
+  id: string;
+  display_name: string;
+  provider: string;
+}
+
+export interface ComparisonRow {
+  key: string;
+  label: string;
+  left: string[];
+  right: string[];
+  different: boolean;
+}
+
+export interface SkillComparison {
+  left: ComparisonSkill;
+  right: ComparisonSkill;
+  rows: ComparisonRow[];
+}

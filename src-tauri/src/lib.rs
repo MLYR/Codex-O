@@ -7,8 +7,9 @@ pub mod observability;
 pub mod parsing;
 pub mod providers;
 pub mod secrets;
+pub mod settings;
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use tauri::Manager;
 
@@ -18,6 +19,7 @@ pub const BUNDLE_IDENTIFIER: &str = "com.zreo.codexo";
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let home_directory = app.path().home_dir().unwrap_or_default();
             let repository_directory =
@@ -41,7 +43,7 @@ pub fn run() {
                 }
                 _ => catalog::SkillCatalog::new(roots),
             };
-            let catalog = match app_local_data_directory {
+            let catalog = match app_local_data_directory.as_ref() {
                 Some(directory) => {
                     catalog.with_preferences_path(directory.join("scan-preferences.json"))
                 }
@@ -57,7 +59,7 @@ pub fn run() {
             let analysis_service = Arc::new(analysis::AnalysisService::new(
                 catalog.clone(),
                 analysis_cache,
-                Some(home_directory),
+                Some(home_directory.clone()),
             ));
             let analysis_queue = analysis::AnalysisQueue::new(
                 Arc::clone(&analysis_service),
@@ -65,8 +67,31 @@ pub fn run() {
                     app.handle().clone(),
                 )),
             );
+            let settings_service = app_local_data_directory
+                .as_ref()
+                .map(|directory| {
+                    Arc::new(settings::SettingsService::new(
+                        settings::config_path(directory),
+                        settings::system_secret_store(),
+                        Arc::clone(&analysis_service),
+                        catalog.clone(),
+                        database.status(),
+                        Some(home_directory.join(".codex/state_5.sqlite")),
+                    ))
+                })
+                .unwrap_or_else(|| {
+                    Arc::new(settings::SettingsService::new(
+                        PathBuf::from("ai-config.json"),
+                        settings::system_secret_store(),
+                        Arc::clone(&analysis_service),
+                        catalog.clone(),
+                        database.status(),
+                        None,
+                    ))
+                });
             app.manage(analysis_queue);
             app.manage(analysis_service);
+            app.manage(settings_service);
             app.manage(catalog);
             app.manage(database);
             Ok(())
@@ -80,7 +105,17 @@ pub fn run() {
             catalog::acknowledge_initial_scan_notice,
             catalog::list_skills,
             catalog::get_skill_detail,
-            analysis::queue::analyze_skill
+            analysis::queue::analyze_skill,
+            analysis::get_skill_analysis,
+            analysis::read_evidence_excerpt,
+            analysis::compare_skills,
+            settings::get_ai_config,
+            settings::save_ai_config,
+            settings::test_ai_connection,
+            settings::get_environment_health,
+            settings::list_additional_roots,
+            settings::select_additional_root,
+            settings::remove_additional_root
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

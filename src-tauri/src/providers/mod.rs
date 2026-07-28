@@ -153,6 +153,7 @@ pub struct ProviderRoots {
     pub plugin_cache_directory: PathBuf,
     pub additional_roots: Vec<AdditionalRoot>,
     pub include_plugin_cache: bool,
+    pub include_bundled_cache: bool,
 }
 
 impl ProviderRoots {
@@ -167,6 +168,7 @@ impl ProviderRoots {
             plugin_cache_directory,
             additional_roots: Vec::new(),
             include_plugin_cache: true,
+            include_bundled_cache: true,
         }
     }
 
@@ -177,6 +179,11 @@ impl ProviderRoots {
 
     pub fn with_plugin_cache_enabled(mut self, enabled: bool) -> Self {
         self.include_plugin_cache = enabled;
+        self
+    }
+
+    pub fn with_bundled_cache_enabled(mut self, enabled: bool) -> Self {
+        self.include_bundled_cache = enabled;
         self
     }
 }
@@ -202,6 +209,14 @@ impl AdditionalRoot {
 
         Some(Self { id, directory })
     }
+
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
 }
 
 pub struct ProviderRegistry {
@@ -209,7 +224,6 @@ pub struct ProviderRegistry {
     repo: DirectoryProvider,
     legacy_user: DirectoryProvider,
     plugin_cache: PluginCacheProvider,
-    plugin_cache_enabled: bool,
     additional_roots: Vec<DirectoryProvider>,
 }
 
@@ -242,8 +256,11 @@ impl ProviderRegistry {
                 descriptor("legacy_user", ProviderKind::LegacyUser),
                 roots.home_directory.join(".codex/skills"),
             ),
-            plugin_cache: PluginCacheProvider::new(roots.plugin_cache_directory),
-            plugin_cache_enabled: roots.include_plugin_cache,
+            plugin_cache: PluginCacheProvider::new(
+                roots.plugin_cache_directory,
+                roots.include_plugin_cache,
+                roots.include_bundled_cache,
+            ),
             additional_roots,
         }
     }
@@ -254,7 +271,7 @@ impl ProviderRegistry {
         discovery.extend(self.user_global.discover());
         discovery.extend(self.repo.discover());
         discovery.extend(self.legacy_user.discover());
-        if self.plugin_cache_enabled {
+        if self.plugin_cache.is_enabled() {
             discovery.extend(self.plugin_cache.discover());
         }
         for additional_root in &self.additional_roots {
@@ -305,11 +322,21 @@ impl SkillProvider for DirectoryProvider {
 
 struct PluginCacheProvider {
     root: PathBuf,
+    include_plugin: bool,
+    include_bundled: bool,
 }
 
 impl PluginCacheProvider {
-    fn new(root: PathBuf) -> Self {
-        Self { root }
+    fn new(root: PathBuf, include_plugin: bool, include_bundled: bool) -> Self {
+        Self {
+            root,
+            include_plugin,
+            include_bundled,
+        }
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.include_plugin || self.include_bundled
     }
 }
 
@@ -347,6 +374,11 @@ impl SkillProvider for PluginCacheProvider {
                     } else {
                         ProviderKind::Plugin
                     };
+                    if (kind == ProviderKind::Plugin && !self.include_plugin)
+                        || (kind == ProviderKind::Bundled && !self.include_bundled)
+                    {
+                        continue;
+                    }
                     let descriptor = ProviderDescriptor {
                         id: format!(
                             "{}:{channel_name}:{plugin_name}:{version_name}",

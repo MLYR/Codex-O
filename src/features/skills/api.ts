@@ -1,7 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AnalysisEnqueueResult,
+  AnalysisView,
   CatalogScan,
+  EvidenceExcerpt,
   ProviderList,
+  SkillComparison,
   SkillDetail,
   SkillList,
   SkillListQuery,
@@ -17,4 +21,12 @@ export const skillCatalogApi = {
       skillId,
       includeSource,
     }),
+  getSkillAnalysis: (skillId: string) =>
+    invoke<AnalysisView>("get_skill_analysis", { skillId }),
+  analyzeSkill: (skillId: string, force = false) =>
+    invoke<AnalysisEnqueueResult>("analyze_skill", { skillId, force }),
+  readEvidenceExcerpt: (evidenceId: string) =>
+    invoke<EvidenceExcerpt>("read_evidence_excerpt", { evidenceId }),
+  compareSkills: (skillIds: [string, string]) =>
+    invoke<SkillComparison>("compare_skills", { skillIds }),
 };

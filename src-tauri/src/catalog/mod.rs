@@ -38,7 +38,7 @@ const MAX_ANALYSIS_REFERENCE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct SkillCatalog {
-    roots: ProviderRoots,
+    roots: Arc<RwLock<ProviderRoots>>,
     // The cache is only replaced by an explicit scan, so list interactions never rescan disk.
     cache: Arc<RwLock<Option<CatalogSnapshot>>>,
     index: Option<CatalogIndex>,
@@ -50,10 +50,11 @@ impl SkillCatalog {
     pub fn new(roots: ProviderRoots) -> Self {
         let preferences = ScanPreferences {
             include_plugin_cache: roots.include_plugin_cache,
+            include_bundled_cache: roots.include_bundled_cache,
             initial_scan_notice_seen: true,
         };
         Self {
-            roots,
+            roots: Arc::new(RwLock::new(roots)),
             cache: Arc::new(RwLock::new(None)),
             index: None,
             preferences: Arc::new(ScanPreferencesStore::in_memory(preferences)),
@@ -64,10 +65,11 @@ impl SkillCatalog {
     pub fn with_index_path(roots: ProviderRoots, database_path: PathBuf) -> Self {
         let preferences = ScanPreferences {
             include_plugin_cache: roots.include_plugin_cache,
+            include_bundled_cache: roots.include_bundled_cache,
             initial_scan_notice_seen: true,
         };
         Self {
-            roots,
+            roots: Arc::new(RwLock::new(roots)),
             cache: Arc::new(RwLock::new(None)),
             index: Some(CatalogIndex::new(database_path)),
             preferences: Arc::new(ScanPreferencesStore::in_memory(preferences)),
@@ -87,11 +89,13 @@ impl SkillCatalog {
     pub fn update_scan_preferences(
         &self,
         include_plugin_cache: bool,
+        include_bundled_cache: bool,
     ) -> Result<ScanPreferences, CatalogError> {
         let current = self.scan_preferences();
         self.preferences
             .set(ScanPreferences {
                 include_plugin_cache,
+                include_bundled_cache,
                 initial_scan_notice_seen: current.initial_scan_notice_seen,
             })
             .map_err(|_| CatalogError::settings_unavailable())?;
@@ -272,6 +276,16 @@ impl SkillCatalog {
         })
     }
 
+    pub(crate) fn current_content_hash(&self, skill_id: &str) -> Result<String, CatalogError> {
+        let skill = self
+            .discover_skill_by_id(skill_id)
+            .ok_or_else(CatalogError::skill_not_found)?;
+        parse_skill(&skill)
+            .snapshot
+            .map(|snapshot| snapshot.content_hash)
+            .ok_or_else(CatalogError::analysis_unavailable)
+    }
+
     fn cached_scan(&self) -> CatalogScan {
         self.cached_snapshot().to_catalog_scan()
     }
@@ -382,8 +396,25 @@ impl SkillCatalog {
 
     fn roots_for_scan(&self) -> ProviderRoots {
         self.roots
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
             .with_plugin_cache_enabled(self.scan_preferences().include_plugin_cache)
+            .with_bundled_cache_enabled(self.scan_preferences().include_bundled_cache)
+    }
+
+    pub(crate) fn roots_snapshot(&self) -> ProviderRoots {
+        self.roots
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn set_additional_roots(&self, roots: Vec<crate::providers::AdditionalRoot>) {
+        self.roots
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .additional_roots = roots;
     }
 }
 
@@ -408,13 +439,16 @@ impl CatalogSnapshot {
     }
 
     fn filtered_for(mut self, preferences: ScanPreferences) -> Self {
-        if !preferences.include_plugin_cache {
+        if !preferences.include_plugin_cache || !preferences.include_bundled_cache {
             self.providers.retain(|provider| {
-                provider.kind != ProviderKind::Plugin && provider.kind != ProviderKind::Bundled
+                (preferences.include_plugin_cache || provider.kind != ProviderKind::Plugin)
+                    && (preferences.include_bundled_cache || provider.kind != ProviderKind::Bundled)
             });
             self.entries.retain(|entry| {
-                entry.summary.provider.kind != ProviderKind::Plugin
-                    && entry.summary.provider.kind != ProviderKind::Bundled
+                (preferences.include_plugin_cache
+                    || entry.summary.provider.kind != ProviderKind::Plugin)
+                    && (preferences.include_bundled_cache
+                        || entry.summary.provider.kind != ProviderKind::Bundled)
             });
         }
         self
@@ -685,8 +719,9 @@ pub fn get_scan_preferences(catalog: State<'_, SkillCatalog>) -> ScanPreferences
 pub fn update_scan_preferences(
     catalog: State<'_, SkillCatalog>,
     include_plugin_cache: bool,
+    include_bundled_cache: bool,
 ) -> Result<ScanPreferences, CatalogError> {
-    catalog.update_scan_preferences(include_plugin_cache)
+    catalog.update_scan_preferences(include_plugin_cache, include_bundled_cache)
 }
 
 #[tauri::command]

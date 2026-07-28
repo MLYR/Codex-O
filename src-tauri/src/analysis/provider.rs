@@ -134,22 +134,19 @@ pub trait AiProvider: Send + Sync {
     ) -> Result<ProviderResponse, AnalysisProviderError>;
 }
 
-pub struct HttpAiProvider<S>
-where
-    S: SecretStore + Send + Sync + 'static,
-{
+pub struct HttpAiProvider {
     config: AiProviderConfig,
     endpoint: Url,
     client: Client,
-    secrets: Arc<S>,
+    secrets: Arc<dyn SecretStore + Send + Sync>,
     retry_delay: Duration,
 }
 
-impl<S> HttpAiProvider<S>
-where
-    S: SecretStore + Send + Sync + 'static,
-{
-    pub fn new(config: AiProviderConfig, secrets: Arc<S>) -> Result<Self, AnalysisProviderError> {
+impl HttpAiProvider {
+    pub fn new(
+        config: AiProviderConfig,
+        secrets: Arc<dyn SecretStore + Send + Sync>,
+    ) -> Result<Self, AnalysisProviderError> {
         let endpoint = provider_endpoint(&config)?;
         let client = Client::builder()
             .redirect(Policy::none())
@@ -268,10 +265,7 @@ where
 }
 
 #[async_trait]
-impl<S> AiProvider for HttpAiProvider<S>
-where
-    S: SecretStore + Send + Sync + 'static,
-{
+impl AiProvider for HttpAiProvider {
     fn identity(&self) -> AiProviderIdentity {
         self.config.identity()
     }

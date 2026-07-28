@@ -69,10 +69,12 @@ beforeEach(() => {
   vi.mocked(skillCatalogApi.scanSkills).mockResolvedValue(catalog);
   vi.mocked(settingsApi.getScanPreferences).mockResolvedValue({
     include_plugin_cache: false,
+    include_bundled_cache: false,
     initial_scan_notice_seen: true,
   });
   vi.mocked(settingsApi.acknowledgeInitialScanNotice).mockResolvedValue({
     include_plugin_cache: false,
+    include_bundled_cache: false,
     initial_scan_notice_seen: true,
   });
 });
@@ -187,6 +189,7 @@ describe("SkillsPage", () => {
     vi.mocked(skillCatalogApi.loadCatalog).mockResolvedValue(null);
     vi.mocked(settingsApi.getScanPreferences).mockResolvedValue({
       include_plugin_cache: false,
+      include_bundled_cache: false,
       initial_scan_notice_seen: false,
     });
     renderPage();
@@ -205,6 +208,7 @@ describe("SkillsPage", () => {
     vi.mocked(skillCatalogApi.loadCatalog).mockResolvedValue(null);
     vi.mocked(settingsApi.getScanPreferences).mockResolvedValue({
       include_plugin_cache: false,
+      include_bundled_cache: false,
       initial_scan_notice_seen: false,
     });
     renderPage();
@@ -221,6 +225,7 @@ describe("SkillsPage", () => {
     vi.mocked(skillCatalogApi.loadCatalog).mockResolvedValue(null);
     vi.mocked(settingsApi.getScanPreferences).mockResolvedValue({
       include_plugin_cache: false,
+      include_bundled_cache: false,
       initial_scan_notice_seen: true,
     });
     let resolveScan: (value: CatalogScan) => void;

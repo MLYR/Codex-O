@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct ScanPreferences {
     pub include_plugin_cache: bool,
     #[serde(default)]
+    pub include_bundled_cache: bool,
+    #[serde(default)]
     pub initial_scan_notice_seen: bool,
 }
 
@@ -13,6 +15,7 @@ impl ScanPreferences {
     pub(super) const fn default_for_desktop() -> Self {
         Self {
             include_plugin_cache: false,
+            include_bundled_cache: false,
             initial_scan_notice_seen: false,
         }
     }

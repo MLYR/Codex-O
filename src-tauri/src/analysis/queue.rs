@@ -255,6 +255,7 @@ pub async fn analyze_skill(
 
 fn job_status(status: AnalysisRunStatus) -> AnalysisJobStatus {
     match status {
+        AnalysisRunStatus::NotRequested => AnalysisJobStatus::Queued,
         AnalysisRunStatus::NotConfigured => AnalysisJobStatus::NotConfigured,
         AnalysisRunStatus::Ready => AnalysisJobStatus::Ready,
         AnalysisRunStatus::Stale => AnalysisJobStatus::Stale,
