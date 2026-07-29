@@ -1,4 +1,4 @@
-import { AlertCircle, ArchiveRestore, LoaderCircle, Trash2 } from "lucide-react";
+import { AlertCircle, Archive, ArchiveRestore, Check, LoaderCircle, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { skillCatalogApi } from "./api";
 import { formatBytes, formatUpdatedAt } from "./format";
@@ -27,12 +27,13 @@ export function QuarantinePanel() {
     void refresh();
   }, []);
 
-  const plan = async (entry: QuarantineEntry, action: "restore" | "purge") => {
+  const plan = async (entry: QuarantineEntry, action: "restore" | "purge" | "keep_active" | "complete") => {
     setBusy(true);
     try {
-      const next = action === "restore"
-        ? await skillCatalogApi.planRestore(entry.id)
-        : await skillCatalogApi.planPurge(entry.id);
+      const next = action === "restore" ? await skillCatalogApi.planRestore(entry.id)
+        : action === "purge" ? await skillCatalogApi.planPurge(entry.id)
+          : action === "keep_active" ? await skillCatalogApi.planKeepActive(entry.id)
+            : await skillCatalogApi.planCompleteQuarantine(entry.id);
       if (next.plan.status === "conflict") {
         setError("conflict_detected");
         return;
@@ -41,7 +42,7 @@ export function QuarantinePanel() {
       setAcknowledgement("");
       setError(undefined);
     } catch {
-      setError(action === "restore" ? "quarantine_content_changed" : "quarantine_partial");
+      setError(action === "purge" ? "quarantine_partial" : "quarantine_content_changed");
     } finally {
       setBusy(false);
     }
@@ -53,11 +54,10 @@ export function QuarantinePanel() {
     }
     setBusy(true);
     try {
-      if (planned.plan.operation === "skill_restore") {
-        await skillCatalogApi.executeRestore(planned.confirmation_token.token);
-      } else {
-        await skillCatalogApi.executePurge(planned.confirmation_token.token, acknowledgement);
-      }
+      if (planned.plan.operation === "skill_restore") await skillCatalogApi.executeRestore(planned.confirmation_token.token);
+      if (planned.plan.operation === "quarantine_purge") await skillCatalogApi.executePurge(planned.confirmation_token.token, acknowledgement);
+      if (planned.plan.operation === "quarantine_keep_active") await skillCatalogApi.executeKeepActive(planned.confirmation_token.token);
+      if (planned.plan.operation === "quarantine_complete") await skillCatalogApi.executeCompleteQuarantine(planned.confirmation_token.token);
       setPlanned(undefined);
       await refresh();
     } catch {
@@ -88,12 +88,15 @@ export function QuarantinePanel() {
             <li key={entry.id}>
               <div>
                 <strong>{entry.display_name}</strong>
-                <span>{entry.status === "partial" ? "需处理" : entry.status === "restored" ? "已恢复" : "已隔离"}</span>
+                <span>{entry.status === "partial" ? "需处理" : entry.status === "restored" ? "已恢复" : entry.status === "purging" ? "清理中" : "已隔离"}</span>
                 <small>{entry.file_count} 个文件 · {formatBytes(entry.total_size_bytes)} · {formatUpdatedAt(entry.quarantined_at)}</small>
               </div>
               {entry.status === "quarantined" ? <div className="quarantine-actions">
                 <button className="icon-button" type="button" aria-label={`恢复 ${entry.display_name}`} title="恢复" disabled={busy} onClick={() => void plan(entry, "restore")}><ArchiveRestore size={16} aria-hidden="true" /></button>
                 <button className="icon-button danger-button" type="button" aria-label={`永久清理 ${entry.display_name}`} title="永久清理" disabled={busy} onClick={() => void plan(entry, "purge")}><Trash2 size={16} aria-hidden="true" /></button>
+              </div> : entry.status === "partial" ? <div className="quarantine-actions">
+                <button className="icon-button" type="button" aria-label={`保留活动副本 ${entry.display_name}`} title="保留活动副本" disabled={busy} onClick={() => void plan(entry, "keep_active")}><Check size={16} aria-hidden="true" /></button>
+                <button className="icon-button" type="button" aria-label={`完成隔离 ${entry.display_name}`} title="完成隔离" disabled={busy} onClick={() => void plan(entry, "complete")}><Archive size={16} aria-hidden="true" /></button>
               </div> : null}
             </li>
           ))}
@@ -115,7 +118,7 @@ export function OperationDialog({ planned, acknowledgement, onAcknowledgement, b
   const { plan } = planned;
   const needsAck = plan.impact.requires_acknowledgement;
   return <div className="dialog-backdrop"><div className="scan-dialog operation-dialog" role="dialog" aria-modal="true" aria-labelledby="operation-title">
-    <h2 id="operation-title">{plan.operation === "quarantine_purge" ? "永久清理" : plan.operation === "skill_restore" ? "恢复 Skill" : "隔离 Skill"}</h2>
+    <h2 id="operation-title">{plan.operation === "quarantine_purge" ? "永久清理" : plan.operation === "skill_restore" ? "恢复 Skill" : plan.operation === "quarantine_keep_active" ? "保留活动副本" : plan.operation === "quarantine_complete" ? "完成隔离" : "隔离 Skill"}</h2>
     <p>{plan.impact.skill_name} · {plan.impact.file_count} 个文件 · {formatBytes(plan.impact.total_size_bytes)}</p>
     <ul className="operation-file-list">{plan.impact.relative_files.map((file) => <li key={file}><code>{file}</code></li>)}</ul>
     {needsAck ? <label className="acknowledgement-field">输入 “{plan.impact.skill_name}” 继续<input autoFocus value={acknowledgement} onChange={(event) => onAcknowledgement(event.target.value)} /></label> : null}

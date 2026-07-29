@@ -171,6 +171,10 @@ pub fn run() {
             operations::list_quarantine_entries,
             operations::plan_skill_restore,
             operations::execute_skill_restore,
+            operations::plan_quarantine_keep_active,
+            operations::execute_quarantine_keep_active,
+            operations::plan_quarantine_complete,
+            operations::execute_quarantine_complete,
             operations::plan_quarantine_purge,
             operations::execute_quarantine_purge
         ])

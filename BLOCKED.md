@@ -1,5 +1,7 @@
 # Codex-O 阻塞与待裁决
 
+**基线差异原始输出**：`status=* main...origin/main [ahead 1]（clean — nothing to commit）`；`head=555c7e00dc299ddc414930e049beb25d5c104f11`；`origin=7953de60787ddddb84dc5044f09bc08743033532`；任务书预期 `HEAD=origin/main=7953de6`。领先提交仅含 `PROGRESS.md` 的 M2-S3.6 开工记录，未改变受控功能源码。
+
 **基线差异原始输出**：`status=* main...origin/main（clean — nothing to commit）`；`head=246bcb7531c2e7aff48d3fdeb1f405bd37b145a5`；`origin=246bcb7531c2e7aff48d3fdeb1f405bd37b145a5`；任务书预期 `origin/main=d04bb5f` 且 main ahead 1。
 
 **基线差异原始输出**：`head=14334b742369d51c8c77512cd9db576c1a7f1975`；`origin=14334b742369d51c8c77512cd9db576c1a7f1975`；任务书预期 origin 为 `4217a71`。
@@ -16,6 +18,16 @@
 无。
 
 ## 已解除
+
+### B-010 M2-S3.6 进度状态与校验器冲突
+
+- 状态：已解除
+- 问题：任务进行中时，M2、M2-S3、M2-S3.6 同时标为“进行中”会被只读校验器按表格顺序计为三个活动叶子。
+- 证据：收工后 M2-S3 与 M2-S3.6 均为已完成，M2 保持唯一进行中节点；`node scripts/check-progress.mjs PROGRESS.md` 通过。
+- 影响：仅影响中间进度门禁；不影响隔离文件或 SQLite 一致性实现。
+- 已尝试：未修改受保护校验器；按任务书完成状态更新后复跑进度检查。
+- 建议：后续长任务的中间检查以此校验器的单一活动叶子规则为准。
+- 解除条件：已满足。
 
 ### B-009 M2-S3 双视口人工验收待确认
 

@@ -41,6 +41,14 @@ export const skillCatalogApi = {
     invoke<PlannedOperation>("plan_skill_restore", { entryId }),
   executeRestore: (confirmationToken: string) =>
     invoke<OperationResult>("execute_skill_restore", { confirmationToken }),
+  planKeepActive: (entryId: string) =>
+    invoke<PlannedOperation>("plan_quarantine_keep_active", { entryId }),
+  executeKeepActive: (confirmationToken: string) =>
+    invoke<OperationResult>("execute_quarantine_keep_active", { confirmationToken }),
+  planCompleteQuarantine: (entryId: string) =>
+    invoke<PlannedOperation>("plan_quarantine_complete", { entryId }),
+  executeCompleteQuarantine: (confirmationToken: string) =>
+    invoke<OperationResult>("execute_quarantine_complete", { confirmationToken }),
   planPurge: (entryId: string) =>
     invoke<PlannedOperation>("plan_quarantine_purge", { entryId }),
   executePurge: (confirmationToken: string, acknowledgement: string) =>

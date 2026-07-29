@@ -11,6 +11,10 @@ vi.mock("./api", () => ({
     listQuarantineEntries: vi.fn(),
     planRestore: vi.fn(),
     executeRestore: vi.fn(),
+    planKeepActive: vi.fn(),
+    executeKeepActive: vi.fn(),
+    planCompleteQuarantine: vi.fn(),
+    executeCompleteQuarantine: vi.fn(),
     planPurge: vi.fn(),
     executePurge: vi.fn(),
   },
@@ -26,14 +30,20 @@ const restorePlan: PlannedOperation = {
   confirmation_token: { token: "token", expires_at_ms: 1 },
 };
 const purgePlan: PlannedOperation = { ...restorePlan, plan: { ...restorePlan.plan, operation: "quarantine_purge", impact: { ...restorePlan.plan.impact, requires_acknowledgement: true } } };
+const keepActivePlan: PlannedOperation = { ...restorePlan, plan: { ...restorePlan.plan, operation: "quarantine_keep_active" } };
+const completePlan: PlannedOperation = { ...restorePlan, plan: { ...restorePlan.plan, operation: "quarantine_complete" } };
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(skillCatalogApi.listQuarantineEntries).mockResolvedValue([]);
   vi.mocked(skillCatalogApi.planRestore).mockResolvedValue(restorePlan);
+  vi.mocked(skillCatalogApi.planKeepActive).mockResolvedValue(keepActivePlan);
+  vi.mocked(skillCatalogApi.planCompleteQuarantine).mockResolvedValue(completePlan);
   vi.mocked(skillCatalogApi.planPurge).mockResolvedValue(purgePlan);
-  vi.mocked(skillCatalogApi.executeRestore).mockResolvedValue({ operation_id: "x", status: "succeeded", skill_id: "skill", installed_hash: "hash" });
-  vi.mocked(skillCatalogApi.executePurge).mockResolvedValue({ operation_id: "x", status: "succeeded", skill_id: "skill", installed_hash: "hash" });
+  vi.mocked(skillCatalogApi.executeRestore).mockResolvedValue({ operation_id: "x", status: "succeeded", skill_id: "skill" });
+  vi.mocked(skillCatalogApi.executeKeepActive).mockResolvedValue({ operation_id: "x", status: "succeeded", skill_id: "skill" });
+  vi.mocked(skillCatalogApi.executeCompleteQuarantine).mockResolvedValue({ operation_id: "x", status: "succeeded", skill_id: "skill" });
+  vi.mocked(skillCatalogApi.executePurge).mockResolvedValue({ operation_id: "x", status: "succeeded", skill_id: "skill" });
 });
 afterEach(cleanup);
 
@@ -100,5 +110,47 @@ describe("QuarantinePanel", () => {
     render(<QuarantinePanel />);
     await screen.findByText("需处理");
     expect(screen.queryByRole("button", { name: "永久清理 Review" })).toBeNull();
+  });
+
+  it("opens the keep-active confirmation for a partial entry", async () => {
+    vi.mocked(skillCatalogApi.listQuarantineEntries).mockResolvedValue([{ ...entry, status: "partial" }]);
+    render(<QuarantinePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "保留活动副本 Review" }));
+    await waitFor(() => expect(skillCatalogApi.planKeepActive).toHaveBeenCalledWith(entry.id));
+    expect(screen.getByRole("dialog", { name: "保留活动副本" })).not.toBeNull();
+  });
+
+  it("opens the complete-quarantine confirmation for a partial entry", async () => {
+    vi.mocked(skillCatalogApi.listQuarantineEntries).mockResolvedValue([{ ...entry, status: "partial" }]);
+    render(<QuarantinePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "完成隔离 Review" }));
+    await waitFor(() => expect(skillCatalogApi.planCompleteQuarantine).toHaveBeenCalledWith(entry.id));
+    expect(screen.getByRole("dialog", { name: "完成隔离" })).not.toBeNull();
+  });
+
+  it("executes keep-active with its confirmation token", async () => {
+    vi.mocked(skillCatalogApi.listQuarantineEntries).mockResolvedValue([{ ...entry, status: "partial" }]);
+    render(<QuarantinePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "保留活动副本 Review" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认" }));
+    await waitFor(() => expect(skillCatalogApi.executeKeepActive).toHaveBeenCalledWith("token"));
+  });
+
+  it("shows a stable error when partial convergence planning fails", async () => {
+    vi.mocked(skillCatalogApi.listQuarantineEntries).mockResolvedValue([{ ...entry, status: "partial" }]);
+    vi.mocked(skillCatalogApi.planCompleteQuarantine).mockRejectedValue(new Error("changed"));
+    render(<QuarantinePanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "完成隔离 Review" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("quarantine_content_changed");
+  });
+
+  it("disables partial controls while a convergence plan is loading", async () => {
+    vi.mocked(skillCatalogApi.listQuarantineEntries).mockResolvedValue([{ ...entry, status: "partial" }]);
+    vi.mocked(skillCatalogApi.planKeepActive).mockImplementation(() => new Promise(() => undefined));
+    render(<QuarantinePanel />);
+    const keepActive = await screen.findByRole("button", { name: "保留活动副本 Review" });
+    fireEvent.click(keepActive);
+    await waitFor(() => expect((keepActive as HTMLButtonElement).disabled).toBe(true));
+    expect((screen.getByRole("button", { name: "完成隔离 Review" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

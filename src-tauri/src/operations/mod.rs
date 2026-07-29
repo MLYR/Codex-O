@@ -45,6 +45,8 @@ pub enum ManagementOperation {
     SkillQuarantine,
     SkillRestore,
     QuarantinePurge,
+    QuarantineKeepActive,
+    QuarantineComplete,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -104,6 +106,7 @@ pub struct OperationResult {
     pub operation_id: String,
     pub status: OperationResultStatus,
     pub skill_id: String,
+    #[serde(skip_serializing)]
     pub installed_hash: String,
     pub entry_id: Option<String>,
 }
@@ -292,6 +295,12 @@ enum PendingManagedAction {
     Purge {
         entry: QuarantineEntry,
     },
+    KeepActive {
+        entry: QuarantineEntry,
+    },
+    CompleteQuarantine {
+        entry: QuarantineEntry,
+    },
 }
 
 #[derive(Clone)]
@@ -353,6 +362,14 @@ pub struct OperationsService {
     force_remove_failure: Mutex<bool>,
     #[cfg(test)]
     force_copy_verification_failure: Mutex<bool>,
+    #[cfg(test)]
+    force_rename_verification_failure: Mutex<bool>,
+    #[cfg(test)]
+    force_status_update_failures: Mutex<usize>,
+    #[cfg(test)]
+    force_delete_entry_failures: Mutex<usize>,
+    #[cfg(test)]
+    force_move_failure_after: Mutex<Option<usize>>,
 }
 
 impl OperationsService {
@@ -379,6 +396,14 @@ impl OperationsService {
             force_remove_failure: Mutex::new(false),
             #[cfg(test)]
             force_copy_verification_failure: Mutex::new(false),
+            #[cfg(test)]
+            force_rename_verification_failure: Mutex::new(false),
+            #[cfg(test)]
+            force_status_update_failures: Mutex::new(0),
+            #[cfg(test)]
+            force_delete_entry_failures: Mutex::new(0),
+            #[cfg(test)]
+            force_move_failure_after: Mutex::new(None),
         }
     }
 
@@ -674,6 +699,44 @@ impl OperationsService {
         self.issue_managed_confirmation(plan, PendingManagedAction::Purge { entry })
     }
 
+    fn plan_keep_active(&self, entry_id: &str) -> Result<PlannedImport, OperationError> {
+        self.plan_partial_resolution(entry_id, ManagementOperation::QuarantineKeepActive, true)
+    }
+
+    fn plan_complete_quarantine(&self, entry_id: &str) -> Result<PlannedImport, OperationError> {
+        self.plan_partial_resolution(entry_id, ManagementOperation::QuarantineComplete, false)
+    }
+
+    fn plan_partial_resolution(
+        &self,
+        entry_id: &str,
+        operation: ManagementOperation,
+        keep_active: bool,
+    ) -> Result<PlannedImport, OperationError> {
+        let entry = self.load_quarantine_entry(entry_id)?;
+        let summary = self.verify_partial_entry(&entry)?;
+        let plan = OperationPlan {
+            id: random_token().ok_or_else(OperationError::selection_unavailable)?,
+            operation,
+            status: OperationPlanStatus::Ready,
+            impact: OperationImpact {
+                target_provider_id: entry.provider_id.clone(),
+                skill_name: entry.display_name.clone(),
+                file_count: summary.file_count,
+                total_size_bytes: summary.total_size_bytes,
+                relative_files: summary.relative_files,
+                entry_id: Some(entry.id.clone()),
+                requires_acknowledgement: false,
+            },
+        };
+        let action = if keep_active {
+            PendingManagedAction::KeepActive { entry }
+        } else {
+            PendingManagedAction::CompleteQuarantine { entry }
+        };
+        self.issue_managed_confirmation(plan, action)
+    }
+
     fn execute_managed(
         &self,
         confirmation_token: &str,
@@ -765,7 +828,20 @@ impl OperationsService {
                 } else {
                     "restored"
                 };
-                self.update_quarantine_status(&entry.id, status, Some(restored_at))?;
+                if let Err(error) =
+                    self.update_quarantine_status(&entry.id, status, Some(restored_at))
+                {
+                    if outcome == MoveOutcome::Succeeded {
+                        // A failed audit finalization must not strand the only copy outside quarantine.
+                        if self.move_tree(&target, &source) == Ok(MoveOutcome::Succeeded) {
+                            self.catalog.scan_skills();
+                            return Err(error);
+                        }
+                    }
+                    let _ = self.update_quarantine_status(&entry.id, "partial", None);
+                    self.catalog.scan_skills();
+                    return Err(OperationError::quarantine_partial());
+                }
                 self.catalog.scan_skills();
                 Ok(OperationResult {
                     operation_id: confirmation.plan.id,
@@ -794,8 +870,47 @@ impl OperationsService {
                 {
                     return Err(OperationError::quarantine_not_allowed());
                 }
-                fs::remove_dir_all(&source).map_err(|_| OperationError::import_failed())?;
+                let current = summarize_tree(&source)?;
+                if current.content_hash != entry.content_hash
+                    || current.file_count != entry.file_count
+                    || current.total_size_bytes != entry.total_size_bytes
+                {
+                    return Err(OperationError::quarantine_content_changed());
+                }
+                self.update_quarantine_status(&entry.id, "purging", None)?;
+                if fs::remove_dir_all(&source).is_err() {
+                    let _ = self.update_quarantine_status(&entry.id, "quarantined", None);
+                    return Err(OperationError::import_failed());
+                }
                 self.delete_quarantine_entry(&entry.id)?;
+                Ok(OperationResult {
+                    operation_id: confirmation.plan.id,
+                    status: OperationResultStatus::Succeeded,
+                    skill_id: entry.skill_id,
+                    installed_hash: entry.content_hash,
+                    entry_id: Some(entry.id),
+                })
+            }
+            PendingManagedAction::KeepActive { entry } => {
+                let source = self.quarantine_entry_path(&entry)?;
+                self.verify_partial_entry(&entry)?;
+                fs::remove_dir_all(&source).map_err(|_| OperationError::import_failed())?;
+                self.update_quarantine_status(&entry.id, "restored", Some(now_ms()))?;
+                self.catalog.scan_skills();
+                Ok(OperationResult {
+                    operation_id: confirmation.plan.id,
+                    status: OperationResultStatus::Succeeded,
+                    skill_id: entry.skill_id,
+                    installed_hash: entry.content_hash,
+                    entry_id: Some(entry.id),
+                })
+            }
+            PendingManagedAction::CompleteQuarantine { entry } => {
+                let target = self.active_entry_path(&entry)?;
+                self.verify_partial_entry(&entry)?;
+                fs::remove_dir_all(&target).map_err(|_| OperationError::import_failed())?;
+                self.update_quarantine_status(&entry.id, "quarantined", None)?;
+                self.catalog.scan_skills();
                 Ok(OperationResult {
                     operation_id: confirmation.plan.id,
                     status: OperationResultStatus::Succeeded,
@@ -898,19 +1013,63 @@ impl OperationsService {
         if entry.id != entry.operation_id || !valid_operation_id(&entry.operation_id) {
             return Err(OperationError::quarantine_not_allowed());
         }
+        self.quarantine_operation_path(&entry.operation_id)
+    }
+
+    fn quarantine_operation_path(&self, operation_id: &str) -> Result<PathBuf, OperationError> {
+        if !valid_operation_id(operation_id) {
+            return Err(OperationError::quarantine_not_allowed());
+        }
         let root = self.quarantine_root()?;
         let root_metadata = fs::symlink_metadata(root).ok();
         if root_metadata.is_some_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(OperationError::quarantine_not_allowed());
         }
-        let path = root.join(&entry.operation_id);
+        let path = root.join(operation_id);
         if path.parent() != Some(root) {
             return Err(OperationError::quarantine_not_allowed());
         }
         Ok(path)
     }
 
+    fn active_entry_path(&self, entry: &QuarantineEntry) -> Result<PathBuf, OperationError> {
+        self.active_relative_path(&entry.original_relative_path)
+    }
+
+    fn active_relative_path(
+        &self,
+        original_relative_path: &str,
+    ) -> Result<PathBuf, OperationError> {
+        if !valid_relative_path(original_relative_path) {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        let path = self.target_root.join(original_relative_path);
+        if path.strip_prefix(&self.target_root).is_err() || path == self.target_root {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        Ok(path)
+    }
+
+    fn verify_partial_entry(&self, entry: &QuarantineEntry) -> Result<TreeSummary, OperationError> {
+        if entry.status != "partial" || !self.catalog.provider_can_restore(&entry.provider_id) {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        let quarantine = summarize_tree(&self.quarantine_entry_path(entry)?)?;
+        let active = summarize_tree(&self.active_entry_path(entry)?)?;
+        if quarantine.content_hash != entry.content_hash
+            || active.content_hash != entry.content_hash
+            || quarantine.content_hash != active.content_hash
+            || quarantine.file_count != active.file_count
+            || quarantine.total_size_bytes != active.total_size_bytes
+        {
+            return Err(OperationError::quarantine_content_changed());
+        }
+        Ok(quarantine)
+    }
+
     fn load_quarantine_entry(&self, entry_id: &str) -> Result<QuarantineEntry, OperationError> {
+        self.converge_purging_entries()?;
+        self.converge_partial_entries()?;
         let path = self
             .database_path
             .as_deref()
@@ -942,6 +1101,9 @@ impl OperationsService {
     }
 
     fn list_quarantine_entries(&self) -> Result<Vec<QuarantineEntry>, OperationError> {
+        self.converge_purging_entries()?;
+        self.converge_quarantined_entries()?;
+        self.converge_partial_entries()?;
         let path = self
             .database_path
             .as_deref()
@@ -972,6 +1134,165 @@ impl OperationsService {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| OperationError::database_unavailable())?;
         Ok(entries)
+    }
+
+    fn converge_purging_entries(&self) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, operation_id, content_hash FROM quarantine_entries WHERE status = 'purging'",
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        let entries = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|_| OperationError::database_unavailable())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| OperationError::database_unavailable())?;
+        drop(statement);
+        for (entry_id, operation_id, content_hash) in entries {
+            let source = match self.quarantine_operation_path(&operation_id) {
+                Ok(source) => source,
+                Err(_) => continue,
+            };
+            match fs::symlink_metadata(&source) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.delete_quarantine_entry(&entry_id)?;
+                }
+                Ok(metadata)
+                    if !metadata.file_type().is_symlink()
+                        && metadata.is_dir()
+                        && summarize_tree(&source)
+                            .map(|summary| summary.content_hash == content_hash)
+                            .unwrap_or(false) =>
+                {
+                    self.update_quarantine_status(&entry_id, "quarantined", None)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn converge_quarantined_entries(&self) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, operation_id, original_relative_path, content_hash FROM quarantine_entries WHERE status = 'quarantined'",
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        let entries = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|_| OperationError::database_unavailable())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| OperationError::database_unavailable())?;
+        drop(statement);
+        for (entry_id, operation_id, relative_path, content_hash) in entries {
+            let quarantine = match self.quarantine_operation_path(&operation_id) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            let active = match self.active_relative_path(&relative_path) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            let active_summary = summarize_tree(&active)
+                .ok()
+                .filter(|summary| summary.content_hash == content_hash);
+            let quarantine_summary = summarize_tree(&quarantine)
+                .ok()
+                .filter(|summary| summary.content_hash == content_hash);
+            if quarantine_summary.is_some() && active_summary.is_some() {
+                self.update_quarantine_status(&entry_id, "partial", None)?;
+            } else if fs::symlink_metadata(&quarantine)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                && active_summary.is_some()
+            {
+                self.update_quarantine_status(&entry_id, "restored", Some(now_ms()))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn converge_partial_entries(&self) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT id, operation_id, original_relative_path, content_hash FROM quarantine_entries WHERE status = 'partial'",
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        let entries = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|_| OperationError::database_unavailable())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| OperationError::database_unavailable())?;
+        drop(statement);
+        for (entry_id, operation_id, relative_path, content_hash) in entries {
+            let quarantine = match self.quarantine_operation_path(&operation_id) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            let active = match self.active_relative_path(&relative_path) {
+                Ok(path) => path,
+                Err(_) => continue,
+            };
+            let quarantine_missing = fs::symlink_metadata(&quarantine)
+                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                .unwrap_or(true);
+            let active_missing = fs::symlink_metadata(&active)
+                .map(|metadata| !metadata.is_dir() || metadata.file_type().is_symlink())
+                .unwrap_or(true);
+            if quarantine_missing
+                && !active_missing
+                && summarize_tree(&active)
+                    .map(|summary| summary.content_hash == content_hash)
+                    .unwrap_or(false)
+            {
+                self.update_quarantine_status(&entry_id, "restored", Some(now_ms()))?;
+            } else if active_missing
+                && !quarantine_missing
+                && summarize_tree(&quarantine)
+                    .map(|summary| summary.content_hash == content_hash)
+                    .unwrap_or(false)
+            {
+                self.update_quarantine_status(&entry_id, "quarantined", None)?;
+            }
+        }
+        Ok(())
     }
 
     fn insert_quarantine_entry(
@@ -1012,17 +1333,38 @@ impl OperationsService {
             .database_path
             .as_deref()
             .ok_or_else(OperationError::database_unavailable)?;
-        let connection =
+        #[cfg(test)]
+        {
+            let mut remaining = lock_unpoisoned(&self.force_status_update_failures);
+            if *remaining > 0 {
+                *remaining -= 1;
+                return Err(OperationError::database_unavailable());
+            }
+        }
+        let mut connection =
             Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
-        connection.execute(
+        let result_json =
+            serde_json::to_string(status).map_err(|_| OperationError::import_failed())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| OperationError::database_unavailable())?;
+        let entries_updated = transaction.execute(
             "UPDATE quarantine_entries SET status = ?2, restored_at = COALESCE(?3, restored_at) WHERE id = ?1",
             params![entry_id, status, restored_at.map(|value| value as i64)],
         ).map_err(|_| OperationError::database_unavailable())?;
-        connection.execute(
+        if entries_updated != 1 {
+            return Err(OperationError::quarantine_entry_not_found());
+        }
+        let operations_updated = transaction.execute(
             "UPDATE management_operations SET status = ?2, result_json = ?3, completed_at = ?4 WHERE id = ?1",
-            params![entry_id, status, serde_json::to_string(status).map_err(|_| OperationError::import_failed())?, now_ms() as i64],
+            params![entry_id, status, result_json, now_ms() as i64],
         ).map_err(|_| OperationError::database_unavailable())?;
-        Ok(())
+        if operations_updated != 1 {
+            return Err(OperationError::quarantine_entry_not_found());
+        }
+        transaction
+            .commit()
+            .map_err(|_| OperationError::database_unavailable())
     }
 
     fn delete_quarantine_entry(&self, entry_id: &str) -> Result<(), OperationError> {
@@ -1030,23 +1372,37 @@ impl OperationsService {
             .database_path
             .as_deref()
             .ok_or_else(OperationError::database_unavailable)?;
+        #[cfg(test)]
+        {
+            let mut remaining = lock_unpoisoned(&self.force_delete_entry_failures);
+            if *remaining > 0 {
+                *remaining -= 1;
+                return Err(OperationError::database_unavailable());
+            }
+        }
         let mut connection =
             Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| OperationError::database_unavailable())?;
-        transaction
+        let entries_deleted = transaction
             .execute(
                 "DELETE FROM quarantine_entries WHERE id = ?1",
                 params![entry_id],
             )
             .map_err(|_| OperationError::database_unavailable())?;
-        transaction
+        if entries_deleted != 1 {
+            return Err(OperationError::quarantine_entry_not_found());
+        }
+        let operations_deleted = transaction
             .execute(
                 "DELETE FROM management_operations WHERE id = ?1",
                 params![entry_id],
             )
             .map_err(|_| OperationError::database_unavailable())?;
+        if operations_deleted != 1 {
+            return Err(OperationError::quarantine_entry_not_found());
+        }
         transaction
             .commit()
             .map_err(|_| OperationError::database_unavailable())
@@ -1085,12 +1441,36 @@ impl OperationsService {
             *lock_unpoisoned(&self.force_copy_verification_failure);
         #[cfg(not(test))]
         let force_copy_verification_failure = false;
+        #[cfg(test)]
+        let force_rename_verification_failure =
+            *lock_unpoisoned(&self.force_rename_verification_failure);
+        #[cfg(not(test))]
+        let force_rename_verification_failure = false;
+        #[cfg(test)]
+        let force_move_failure = {
+            let mut after = lock_unpoisoned(&self.force_move_failure_after);
+            match after.as_mut() {
+                Some(remaining) if *remaining == 0 => {
+                    *after = None;
+                    true
+                }
+                Some(remaining) => {
+                    *remaining -= 1;
+                    false
+                }
+                None => false,
+            }
+        };
+        #[cfg(not(test))]
+        let force_move_failure = false;
         move_tree(
             source,
             destination,
             force_copy_fallback,
             force_remove_failure,
             force_copy_verification_failure,
+            force_rename_verification_failure,
+            force_move_failure,
         )
     }
 
@@ -1180,6 +1560,26 @@ impl OperationsService {
     fn force_copy_verification_failure(&self) {
         *lock_unpoisoned(&self.force_copy_verification_failure) = true;
     }
+
+    #[cfg(test)]
+    fn force_rename_verification_failure(&self) {
+        *lock_unpoisoned(&self.force_rename_verification_failure) = true;
+    }
+
+    #[cfg(test)]
+    fn force_status_update_failures(&self, failures: usize) {
+        *lock_unpoisoned(&self.force_status_update_failures) = failures;
+    }
+
+    #[cfg(test)]
+    fn force_delete_entry_failures(&self, failures: usize) {
+        *lock_unpoisoned(&self.force_delete_entry_failures) = failures;
+    }
+
+    #[cfg(test)]
+    fn force_move_failure_after(&self, successful_moves: usize) {
+        *lock_unpoisoned(&self.force_move_failure_after) = Some(successful_moves);
+    }
 }
 
 #[tauri::command]
@@ -1249,6 +1649,38 @@ pub fn plan_skill_restore(
 
 #[tauri::command]
 pub fn execute_skill_restore(
+    operations: State<'_, Arc<OperationsService>>,
+    confirmation_token: String,
+) -> Result<OperationResult, OperationError> {
+    operations.execute_managed(&confirmation_token, None)
+}
+
+#[tauri::command]
+pub fn plan_quarantine_keep_active(
+    operations: State<'_, Arc<OperationsService>>,
+    entry_id: String,
+) -> Result<PlannedImport, OperationError> {
+    operations.plan_keep_active(&entry_id)
+}
+
+#[tauri::command]
+pub fn execute_quarantine_keep_active(
+    operations: State<'_, Arc<OperationsService>>,
+    confirmation_token: String,
+) -> Result<OperationResult, OperationError> {
+    operations.execute_managed(&confirmation_token, None)
+}
+
+#[tauri::command]
+pub fn plan_quarantine_complete(
+    operations: State<'_, Arc<OperationsService>>,
+    entry_id: String,
+) -> Result<PlannedImport, OperationError> {
+    operations.plan_complete_quarantine(&entry_id)
+}
+
+#[tauri::command]
+pub fn execute_quarantine_complete(
     operations: State<'_, Arc<OperationsService>>,
     confirmation_token: String,
 ) -> Result<OperationResult, OperationError> {
@@ -1368,7 +1800,12 @@ fn move_tree(
     force_copy_fallback: bool,
     force_remove_failure: bool,
     force_copy_verification_failure: bool,
+    force_rename_verification_failure: bool,
+    force_move_failure: bool,
 ) -> Result<MoveOutcome, OperationError> {
+    if force_move_failure {
+        return Err(OperationError::import_failed());
+    }
     let source_summary = summarize_tree(source)?;
     let parent = destination
         .parent()
@@ -1378,7 +1815,23 @@ fn move_tree(
         return Err(OperationError::conflict_detected());
     }
     if !force_copy_fallback && fs::rename(source, destination).is_ok() {
-        return Ok(MoveOutcome::Succeeded);
+        let verified = summarize_tree(destination)
+            .map(|destination_summary| {
+                !force_rename_verification_failure
+                    && destination_summary.content_hash == source_summary.content_hash
+                    && destination_summary.file_count == source_summary.file_count
+                    && destination_summary.total_size_bytes == source_summary.total_size_bytes
+            })
+            .unwrap_or(false);
+        if verified {
+            return Ok(MoveOutcome::Succeeded);
+        }
+        // A rename removes the source immediately; restore it before reporting verification failure.
+        return if fs::rename(destination, source).is_ok() {
+            Err(OperationError::import_failed())
+        } else {
+            Ok(MoveOutcome::Partial)
+        };
     }
     if let Err(error) = copy_tree(source, destination) {
         let _ = fs::remove_dir_all(destination);

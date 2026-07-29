@@ -95,7 +95,9 @@ export type ManagementOperation =
   | "skill_import"
   | "skill_quarantine"
   | "skill_restore"
-  | "quarantine_purge";
+  | "quarantine_purge"
+  | "quarantine_keep_active"
+  | "quarantine_complete";
 
 export type OperationPlanStatus = "ready" | "conflict" | "partial";
 
@@ -130,7 +132,6 @@ export interface OperationResult {
   operation_id: string;
   status: "succeeded" | "partial";
   skill_id: string;
-  installed_hash: string;
   entry_id?: string;
 }
 
@@ -142,7 +143,7 @@ export interface QuarantineEntry {
   display_name: string;
   file_count: number;
   total_size_bytes: number;
-  status: "pending" | "quarantined" | "partial" | "restored";
+  status: "pending" | "quarantined" | "partial" | "purging" | "restored";
   quarantined_at: number;
   restored_at?: number;
 }
