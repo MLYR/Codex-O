@@ -12,7 +12,9 @@ vi.mock("./api", async () => {
     installApi: {
       selectImportSource: vi.fn(),
       planSkillImport: vi.fn(),
+      planGithubImport: vi.fn(),
       executeSkillImport: vi.fn(),
+      cancelSkillImport: vi.fn(),
     },
   };
 });
@@ -35,6 +37,20 @@ const readyPlan: PlannedImport = {
   },
 };
 
+const githubPlan: PlannedImport = {
+  ...readyPlan,
+  plan: {
+    ...readyPlan.plan,
+    source: {
+      source_type: "github",
+      repository_url: "https://github.com/openai/codex",
+      repo_ref: "main",
+      commit_sha: "0123456789abcdef0123456789abcdef01234567",
+      subdirectory: "skills/fixture-skill",
+    },
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(installApi.selectImportSource).mockResolvedValue({
@@ -42,6 +58,8 @@ beforeEach(() => {
     expires_at_ms: 1_800_000_000_000,
   });
   vi.mocked(installApi.planSkillImport).mockResolvedValue(readyPlan);
+  vi.mocked(installApi.planGithubImport).mockResolvedValue(githubPlan);
+  vi.mocked(installApi.cancelSkillImport).mockResolvedValue(undefined);
   vi.mocked(installApi.executeSkillImport).mockResolvedValue({
     operation_id: "operation-safe-id",
     status: "succeeded",
@@ -89,7 +107,7 @@ describe("InstallPage", () => {
     await waitFor(() => {
       expect(installApi.executeSkillImport).toHaveBeenCalledWith("confirmation-secret");
     });
-    expect(await screen.findByRole("heading", { name: "Skill 已导入" })).not.toBeNull();
+    expect(await screen.findByRole("heading", { name: "Skill 已安装" })).not.toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -131,5 +149,114 @@ describe("InstallPage", () => {
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(installApi.executeSkillImport).not.toHaveBeenCalled();
+    expect(installApi.cancelSkillImport).toHaveBeenCalledWith("confirmation-secret");
+  });
+
+  it("cancels the backend plan before switching installation modes", async () => {
+    render(<InstallPage />);
+    fireEvent.click(screen.getByRole("button", { name: /选择 SKILL.md/ }));
+    await screen.findByRole("dialog", { name: "导入计划" });
+
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+
+    await waitFor(() => {
+      expect(installApi.cancelSkillImport).toHaveBeenCalledWith("confirmation-secret");
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByLabelText("仓库 URL")).not.toBeNull();
+  });
+
+  it("cancels the backend plan when leaving the install route", async () => {
+    const view = render(<InstallPage />);
+    fireEvent.click(screen.getByRole("button", { name: /选择 SKILL.md/ }));
+    await screen.findByRole("dialog", { name: "导入计划" });
+
+    view.unmount();
+
+    await waitFor(() => {
+      expect(installApi.cancelSkillImport).toHaveBeenCalledWith("confirmation-secret");
+    });
+  });
+
+  it("switches to the GitHub source form", () => {
+    render(<InstallPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+
+    expect(screen.getByLabelText("仓库 URL")).not.toBeNull();
+    expect((screen.getByLabelText("Ref") as HTMLInputElement).value).toBe("main");
+    expect(screen.getByLabelText("子目录")).not.toBeNull();
+  });
+
+  it("plans a GitHub import with separate normalized fields", async () => {
+    render(<InstallPage />);
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    fireEvent.change(screen.getByLabelText("仓库 URL"), {
+      target: { value: " https://github.com/OpenAI/Codex.git " },
+    });
+    fireEvent.change(screen.getByLabelText("Ref"), {
+      target: { value: " feature/install " },
+    });
+    fireEvent.change(screen.getByLabelText("子目录"), {
+      target: { value: " skills/fixture-skill " },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "检查安装计划" }));
+
+    expect(await screen.findByRole("dialog", { name: "导入计划" })).not.toBeNull();
+    expect(installApi.planGithubImport).toHaveBeenCalledWith(
+      "https://github.com/OpenAI/Codex.git",
+      "feature/install",
+      "skills/fixture-skill",
+    );
+  });
+
+  it("shows fixed GitHub provenance without exposing confirmation tokens", async () => {
+    render(<InstallPage />);
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    fireEvent.change(screen.getByLabelText("仓库 URL"), {
+      target: { value: "https://github.com/openai/codex" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "检查安装计划" }));
+
+    expect(await screen.findByText("0123456789abcdef0123456789abcdef01234567")).not.toBeNull();
+    expect(screen.getByText("skills/fixture-skill")).not.toBeNull();
+    expect(screen.queryByText("confirmation-secret")).toBeNull();
+  });
+
+  it("renders GitHub rate-limit recovery guidance", async () => {
+    vi.mocked(installApi.planGithubImport).mockRejectedValue({
+      code: "github_rate_limited",
+      message: "GitHub 暂时限制了请求。",
+      recovery: "请稍后重新检查安装计划。",
+    });
+    render(<InstallPage />);
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    fireEvent.change(screen.getByLabelText("仓库 URL"), {
+      target: { value: "https://github.com/openai/codex" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "检查安装计划" }));
+
+    expect(await screen.findByText("github_rate_limited")).not.toBeNull();
+    expect(screen.getByText("请稍后重新检查安装计划。")).not.toBeNull();
+  });
+
+  it("shows GitHub planning progress while the request is pending", async () => {
+    let resolvePlan: ((plan: PlannedImport) => void) | undefined;
+    vi.mocked(installApi.planGithubImport).mockImplementation(
+      () => new Promise((resolve) => (resolvePlan = resolve)),
+    );
+    render(<InstallPage />);
+    fireEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    fireEvent.change(screen.getByLabelText("仓库 URL"), {
+      target: { value: "https://github.com/openai/codex" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "检查安装计划" }));
+
+    expect(await screen.findByText("正在固定版本并检查仓库内容")).not.toBeNull();
+    resolvePlan?.(githubPlan);
+    expect(await screen.findByRole("dialog", { name: "导入计划" })).not.toBeNull();
   });
 });

@@ -1,5 +1,7 @@
 //! Security boundary for the plan → confirm → execute lifecycle of Skill writes.
 
+mod github;
+
 use std::{
     collections::HashMap,
     fs,
@@ -93,6 +95,17 @@ pub struct OperationPlan {
     pub operation: ManagementOperation,
     pub status: OperationPlanStatus,
     pub impact: OperationImpact,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<OperationSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OperationSource {
+    pub source_type: String,
+    pub repository_url: String,
+    pub repo_ref: String,
+    pub commit_sha: String,
+    pub subdirectory: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -274,11 +287,33 @@ struct SelectedSource {
 #[derive(Clone)]
 struct PendingConfirmation {
     plan: OperationPlan,
-    source_path: PathBuf,
-    kind: ImportSourceKind,
-    source_hash: String,
+    source: PendingImportSource,
     expires_at_ms: u64,
     consumed: bool,
+}
+
+#[derive(Clone)]
+enum PendingImportSource {
+    Local {
+        source_path: PathBuf,
+        kind: ImportSourceKind,
+        source_hash: String,
+    },
+    Github {
+        operation_root: PathBuf,
+        staging_home: PathBuf,
+        staged_skill: PathBuf,
+        source_hash: String,
+        provenance: OperationSource,
+    },
+}
+
+impl PendingImportSource {
+    fn cleanup(&self) {
+        if let Self::Github { operation_root, .. } = self {
+            let _ = fs::remove_dir_all(operation_root);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -294,6 +329,7 @@ enum PendingManagedAction {
     },
     Purge {
         entry: QuarantineEntry,
+        summary: TreeSummary,
     },
     KeepActive {
         entry: QuarantineEntry,
@@ -349,6 +385,7 @@ pub struct QuarantineEntry {
 pub struct OperationsService {
     database_path: Option<PathBuf>,
     quarantine_root: Option<PathBuf>,
+    github_staging_root: Option<PathBuf>,
     target_root: PathBuf,
     catalog: SkillCatalog,
     diagnostics: Arc<DiagnosticService>,
@@ -380,9 +417,18 @@ impl OperationsService {
         diagnostics: Arc<DiagnosticService>,
     ) -> Self {
         let target_root = catalog.managed_user_root();
+        let github_staging_root = app_local_data_root
+            .as_ref()
+            .map(|root| root.join("github-staging"));
+        if let Some(root) = github_staging_root.as_deref() {
+            github::cleanup_abandoned_staging(root);
+        }
         Self {
             database_path,
-            quarantine_root: app_local_data_root.map(|root| root.join("quarantine")),
+            quarantine_root: app_local_data_root
+                .as_ref()
+                .map(|root| root.join("quarantine")),
+            github_staging_root,
             target_root,
             catalog,
             diagnostics,
@@ -468,6 +514,7 @@ impl OperationsService {
                 entry_id: None,
                 requires_acknowledgement: false,
             },
+            source: None,
         };
         if conflict {
             self.emit_failure(DiagnosticErrorCode::OperationConflict);
@@ -483,9 +530,11 @@ impl OperationsService {
             token.clone(),
             PendingConfirmation {
                 plan: plan.clone(),
-                source_path: selected.source_path,
-                kind: selected.kind,
-                source_hash: source.source_hash,
+                source: PendingImportSource::Local {
+                    source_path: selected.source_path,
+                    kind: selected.kind,
+                    source_hash: source.source_hash,
+                },
                 expires_at_ms,
                 consumed: false,
             },
@@ -518,50 +567,100 @@ impl OperationsService {
             self.emit_failure(DiagnosticErrorCode::OperationConflict);
             return Err(OperationError::conflict_detected());
         }
-        let source = inspect_source(confirmation.kind, &confirmation.source_path)?;
-        if source.source_hash != confirmation.source_hash {
-            self.emit_failure(DiagnosticErrorCode::OperationSourceChanged);
-            return Err(OperationError::source_changed());
-        }
-        if source.target_name != confirmation.plan.impact.skill_name
-            || path_exists(&self.target_root.join(&source.target_name))
-        {
-            self.emit_failure(DiagnosticErrorCode::OperationConflict);
-            return Err(OperationError::conflict_detected());
-        }
-        self.ensure_audit_store()?;
-
-        let staging_home = self.create_staging_home(&confirmation.plan.id)?;
-        let staged_skill = staging_home
-            .join(".agents")
-            .join("skills")
-            .join(&source.target_name);
+        let mut cleanup_root = match &confirmation.source {
+            PendingImportSource::Local { .. } => None,
+            PendingImportSource::Github { operation_root, .. } => Some(operation_root.clone()),
+        };
         let execution = (|| {
-            copy_source_to_staging(&source, &staged_skill)?;
+            let (staging_home, staged_skill, expected_hash, target_name, provenance) =
+                match &confirmation.source {
+                    PendingImportSource::Local {
+                        source_path,
+                        kind,
+                        source_hash,
+                    } => {
+                        let source = inspect_source(*kind, source_path)?;
+                        if source.source_hash != *source_hash {
+                            return Err(OperationError::source_changed());
+                        }
+                        if source.target_name != confirmation.plan.impact.skill_name
+                            || path_exists(&self.target_root.join(&source.target_name))
+                        {
+                            return Err(OperationError::conflict_detected());
+                        }
+                        let staging_home = self.create_staging_home(&confirmation.plan.id)?;
+                        cleanup_root = Some(staging_home.clone());
+                        let staged_skill = staging_home
+                            .join(".agents")
+                            .join("skills")
+                            .join(&source.target_name);
+                        copy_source_to_staging(&source, &staged_skill)?;
+                        (
+                            staging_home,
+                            staged_skill,
+                            source_hash.clone(),
+                            source.target_name,
+                            None,
+                        )
+                    }
+                    PendingImportSource::Github {
+                        operation_root,
+                        staging_home,
+                        staged_skill,
+                        source_hash,
+                        provenance,
+                    } => {
+                        self.validate_github_staging(operation_root, staging_home, staged_skill)?;
+                        github::validate_provenance(provenance)?;
+                        if confirmation.plan.source.as_ref() != Some(provenance) {
+                            return Err(OperationError::source_changed());
+                        }
+                        (
+                            staging_home.clone(),
+                            staged_skill.clone(),
+                            source_hash.clone(),
+                            confirmation.plan.impact.skill_name.clone(),
+                            Some(provenance.clone()),
+                        )
+                    }
+                };
+            self.ensure_audit_store()?;
             let staged = inspect_source(ImportSourceKind::Directory, &staged_skill)?;
-            if staged.source_hash != confirmation.source_hash {
+            if staged.source_hash != expected_hash || staged.target_name != target_name {
                 return Err(OperationError::source_changed());
             }
             let facts = self
                 .catalog
-                .validate_import_staging(staging_home.clone(), &source.target_name)
+                .validate_import_staging(staging_home.clone(), &target_name)
                 .map_err(|_| OperationError::import_source_invalid())?;
-            validate_import_metadata(&facts.name, &facts.description, &source.target_name)?;
+            validate_import_metadata(&facts.name, &facts.description, &target_name)?;
 
-            let target = self.target_root.join(&source.target_name);
+            // GitHub staging lives under app-local data, so the managed target may not exist yet.
+            fs::create_dir_all(&self.target_root).map_err(|_| OperationError::import_failed())?;
+            let target = self.target_root.join(&target_name);
             if path_exists(&target) {
                 return Err(OperationError::conflict_detected());
             }
             fs::rename(&staged_skill, &target).map_err(|_| OperationError::import_failed())?;
-            let _ = fs::remove_dir_all(&staging_home);
+            if let Some(root) = cleanup_root.as_ref() {
+                let _ = fs::remove_dir_all(root);
+            }
             self.catalog.scan_skills();
-            let skill_id = self
-                .catalog
-                .managed_skill_id(&source.target_name)
-                .ok_or_else(OperationError::import_failed)?;
-            if let Err(error) =
-                self.persist_success(&confirmation.plan, &skill_id, &facts.content_hash)
-            {
+            let skill_id = match self.catalog.managed_skill_id(&target_name) {
+                Some(skill_id) => skill_id,
+                None => {
+                    // A failed Catalog refresh must not leave an unaudited installed directory.
+                    let _ = fs::remove_dir_all(&target);
+                    self.catalog.scan_skills();
+                    return Err(OperationError::import_failed());
+                }
+            };
+            if let Err(error) = self.persist_success(
+                &confirmation.plan,
+                &skill_id,
+                &facts.content_hash,
+                provenance.as_ref(),
+            ) {
                 let _ = fs::remove_dir_all(&target);
                 self.catalog.scan_skills();
                 return Err(error);
@@ -575,7 +674,9 @@ impl OperationsService {
             })
         })();
         if execution.is_err() {
-            let _ = fs::remove_dir_all(&staging_home);
+            if let Some(root) = cleanup_root.as_ref() {
+                let _ = fs::remove_dir_all(root);
+            }
         }
         match &execution {
             Ok(result) => {
@@ -618,6 +719,7 @@ impl OperationsService {
                 entry_id: None,
                 requires_acknowledgement,
             },
+            source: None,
         };
         self.issue_managed_confirmation(
             plan,
@@ -630,13 +732,18 @@ impl OperationsService {
     }
 
     fn plan_restore(&self, entry_id: &str) -> Result<PlannedImport, OperationError> {
+        // A failed restore rollback can leave an active copy with a stale quarantined row.
+        self.converge_quarantined_entries()?;
         let entry = self.load_quarantine_entry(entry_id)?;
         if entry.status != "quarantined" || !self.catalog.provider_can_restore(&entry.provider_id) {
             return Err(OperationError::quarantine_not_allowed());
         }
         let source = self.quarantine_entry_path(&entry)?;
         let summary = summarize_tree(&source)?;
-        if summary.content_hash != entry.content_hash {
+        if summary.content_hash != entry.content_hash
+            || summary.file_count != entry.file_count
+            || summary.total_size_bytes != entry.total_size_bytes
+        {
             return Err(OperationError::quarantine_content_changed());
         }
         let target = self.target_root.join(&entry.original_relative_path);
@@ -658,6 +765,7 @@ impl OperationsService {
                 entry_id: Some(entry.id.clone()),
                 requires_acknowledgement: false,
             },
+            source: None,
         };
         if conflict {
             self.emit_failure(DiagnosticErrorCode::OperationConflict);
@@ -679,7 +787,10 @@ impl OperationsService {
         }
         let source = self.quarantine_entry_path(&entry)?;
         let summary = summarize_tree(&source)?;
-        if summary.content_hash != entry.content_hash {
+        if summary.content_hash != entry.content_hash
+            || summary.file_count != entry.file_count
+            || summary.total_size_bytes != entry.total_size_bytes
+        {
             return Err(OperationError::quarantine_content_changed());
         }
         let plan = OperationPlan {
@@ -691,12 +802,13 @@ impl OperationsService {
                 skill_name: entry.display_name.clone(),
                 file_count: entry.file_count,
                 total_size_bytes: entry.total_size_bytes,
-                relative_files: summary.relative_files,
+                relative_files: summary.relative_files.clone(),
                 entry_id: Some(entry.id.clone()),
                 requires_acknowledgement: true,
             },
+            source: None,
         };
-        self.issue_managed_confirmation(plan, PendingManagedAction::Purge { entry })
+        self.issue_managed_confirmation(plan, PendingManagedAction::Purge { entry, summary })
     }
 
     fn plan_keep_active(&self, entry_id: &str) -> Result<PlannedImport, OperationError> {
@@ -728,6 +840,7 @@ impl OperationsService {
                 entry_id: Some(entry.id.clone()),
                 requires_acknowledgement: false,
             },
+            source: None,
         };
         let action = if keep_active {
             PendingManagedAction::KeepActive { entry }
@@ -855,7 +968,7 @@ impl OperationsService {
                     entry_id: Some(entry.id),
                 })
             }
-            PendingManagedAction::Purge { entry } => {
+            PendingManagedAction::Purge { entry, summary } => {
                 if acknowledgement.map(str::trim) != Some(entry.display_name.as_str()) {
                     return Err(OperationError::acknowledgement_required());
                 }
@@ -871,9 +984,11 @@ impl OperationsService {
                     return Err(OperationError::quarantine_not_allowed());
                 }
                 let current = summarize_tree(&source)?;
-                if current.content_hash != entry.content_hash
-                    || current.file_count != entry.file_count
-                    || current.total_size_bytes != entry.total_size_bytes
+                // Permanent deletion stays bound to the exact tree shown by the purge plan.
+                if current.content_hash != summary.content_hash
+                    || current.file_count != summary.file_count
+                    || current.total_size_bytes != summary.total_size_bytes
+                    || summary.content_hash != entry.content_hash
                 {
                     return Err(OperationError::quarantine_content_changed());
                 }
@@ -977,7 +1092,9 @@ impl OperationsService {
             .get_mut(confirmation_token)
             .ok_or_else(OperationError::confirmation_token_invalid)?;
         if confirmation.expires_at_ms <= now {
-            confirmations.remove(confirmation_token);
+            if let Some(expired) = confirmations.remove(confirmation_token) {
+                expired.source.cleanup();
+            }
             return Err(OperationError::confirmation_token_expired());
         }
         if confirmation.consumed {
@@ -985,6 +1102,24 @@ impl OperationsService {
         }
         confirmation.consumed = true;
         Ok(confirmation.clone())
+    }
+
+    fn cancel_import(&self, confirmation_token: &str) -> Result<(), OperationError> {
+        let confirmation = {
+            let mut confirmations = lock_unpoisoned(&self.confirmations);
+            let confirmation = confirmations
+                .get(confirmation_token)
+                .ok_or_else(OperationError::confirmation_token_invalid)?;
+            if confirmation.consumed {
+                return Err(OperationError::confirmation_token_replayed());
+            }
+            confirmations
+                .remove(confirmation_token)
+                .ok_or_else(OperationError::confirmation_token_invalid)?
+        };
+        // The token binds the internal staging path; callers never provide a filesystem path.
+        confirmation.source.cleanup();
+        Ok(())
     }
 
     fn is_managed_skill(&self, skill_id: &str) -> Result<bool, OperationError> {
@@ -1479,6 +1614,7 @@ impl OperationsService {
         plan: &OperationPlan,
         skill_id: &str,
         installed_hash: &str,
+        provenance: Option<&OperationSource>,
     ) -> Result<(), OperationError> {
         let path = self
             .database_path
@@ -1492,14 +1628,24 @@ impl OperationsService {
         let plan_json = serde_json::to_string(plan).map_err(|_| OperationError::import_failed())?;
         let result_json = serde_json::to_string(&OperationResultStatus::Succeeded)
             .map_err(|_| OperationError::import_failed())?;
+        let (source_type, source_url, repo_ref, commit_sha, subdirectory) = match provenance {
+            Some(source) => (
+                source.source_type.as_str(),
+                Some(source.repository_url.as_str()),
+                Some(source.repo_ref.as_str()),
+                Some(source.commit_sha.as_str()),
+                Some(source.subdirectory.as_str()),
+            ),
+            None => ("local", None, None, None, None),
+        };
         let now = now_ms() as i64;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| OperationError::database_unavailable())?;
         transaction
             .execute(
-                "INSERT INTO install_receipts(skill_id, source_type, source_url, repo_ref, commit_sha, subdirectory, installed_hash, installed_at, managed_by) VALUES(?1, ?2, NULL, NULL, NULL, NULL, ?3, ?4, ?5)",
-                params![skill_id, "local", installed_hash, now, "codex-o"],
+                "INSERT INTO install_receipts(skill_id, source_type, source_url, repo_ref, commit_sha, subdirectory, installed_hash, installed_at, managed_by) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![skill_id, source_type, source_url, repo_ref, commit_sha, subdirectory, installed_hash, now, "codex-o"],
             )
             .map_err(|_| OperationError::import_failed())?;
         transaction
@@ -1608,11 +1754,31 @@ pub fn plan_skill_import(
 }
 
 #[tauri::command]
+pub async fn plan_github_import(
+    operations: State<'_, Arc<OperationsService>>,
+    repository_url: String,
+    repo_ref: String,
+    subdirectory: String,
+) -> Result<PlannedImport, OperationError> {
+    operations
+        .plan_github_import(&repository_url, &repo_ref, &subdirectory)
+        .await
+}
+
+#[tauri::command]
 pub fn execute_skill_import(
     operations: State<'_, Arc<OperationsService>>,
     confirmation_token: String,
 ) -> Result<OperationResult, OperationError> {
     operations.execute_import(&confirmation_token)
+}
+
+#[tauri::command]
+pub fn cancel_skill_import(
+    operations: State<'_, Arc<OperationsService>>,
+    confirmation_token: String,
+) -> Result<(), OperationError> {
+    operations.cancel_import(&confirmation_token)
 }
 
 #[tauri::command]

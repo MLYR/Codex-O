@@ -80,6 +80,26 @@ export function OperationPlanModal({
             <dt>总大小</dt>
             <dd>{formatBytes(impact.total_size_bytes)}</dd>
           </div>
+          {plannedImport.plan.source ? (
+            <>
+              <div className="is-wide">
+                <dt>GitHub 仓库</dt>
+                <dd>{plannedImport.plan.source.repository_url}</dd>
+              </div>
+              <div>
+                <dt>Ref</dt>
+                <dd>{plannedImport.plan.source.repo_ref}</dd>
+              </div>
+              <div>
+                <dt>Commit</dt>
+                <dd className="operation-source-sha">{plannedImport.plan.source.commit_sha}</dd>
+              </div>
+              <div className="is-wide">
+                <dt>子目录</dt>
+                <dd>{plannedImport.plan.source.subdirectory || "仓库内唯一 Skill"}</dd>
+              </div>
+            </>
+          ) : null}
         </dl>
 
         {conflict ? (

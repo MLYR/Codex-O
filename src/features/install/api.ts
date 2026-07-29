@@ -25,6 +25,15 @@ export interface OperationPlan {
   operation: "skill_import";
   status: OperationPlanStatus;
   impact: OperationImpact;
+  source?: OperationSource;
+}
+
+export interface OperationSource {
+  source_type: "github";
+  repository_url: string;
+  repo_ref: string;
+  commit_sha: string;
+  subdirectory: string;
 }
 
 export interface PlannedImport {
@@ -50,8 +59,16 @@ export const installApi = {
     invoke<SelectionToken>("select_import_source", { kind }),
   planSkillImport: (selectionToken: string) =>
     invoke<PlannedImport>("plan_skill_import", { selectionToken }),
+  planGithubImport: (repositoryUrl: string, repoRef: string, subdirectory: string) =>
+    invoke<PlannedImport>("plan_github_import", {
+      repositoryUrl,
+      repoRef,
+      subdirectory,
+    }),
   executeSkillImport: (confirmationToken: string) =>
     invoke<OperationResult>("execute_skill_import", { confirmationToken }),
+  cancelSkillImport: (confirmationToken: string) =>
+    invoke<void>("cancel_skill_import", { confirmationToken }),
 };
 
 export function safeOperationError(failure: unknown): OperationError {
@@ -75,6 +92,6 @@ export function safeOperationError(failure: unknown): OperationError {
   return {
     code: "operation_unavailable",
     message: "导入操作暂时不可用。",
-    recovery: "请重新选择本地 Skill 后再试。",
+    recovery: "请重新检查 Skill 来源后再试。",
   };
 }

@@ -1,0 +1,91 @@
+.install-mode-switch {
+  display: inline-flex;
+  gap: 2px;
+  margin-top: var(--space-5);
+  padding: 3px;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.install-mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 34px;
+  padding: 0 var(--space-3);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+}
+
+.install-mode-switch button[aria-pressed="true"] {
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  box-shadow: 0 1px 2px rgba(24, 28, 40, 0.12);
+}
+
+.github-install-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.github-field {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.github-field.is-wide,
+.github-plan-button {
+  grid-column: 1 / -1;
+}
+
+.github-field input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  padding: 0 var(--space-3);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+}
+
+.github-field input:focus {
+  border-color: var(--color-primary);
+  outline: 2px solid var(--color-primary-subtle);
+  outline-offset: 1px;
+}
+
+.github-plan-button {
+  justify-self: start;
+}
+
+.operation-impact-list .is-wide {
+  grid-column: 1 / -1;
+}
+
+.operation-source-sha {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+@media (max-width: 680px) {
+  .github-install-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .github-field,
+  .github-field.is-wide,
+  .github-plan-button {
+    grid-column: 1;
+  }
+}

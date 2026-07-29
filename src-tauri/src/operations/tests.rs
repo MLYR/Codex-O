@@ -1093,6 +1093,20 @@ fn persistent_restore_database_failure_converges_the_active_copy() {
         )
         .unwrap();
     assert_eq!(stale_status, "quarantined");
+    let retry_error = fixture
+        .service
+        .plan_restore(&quarantine.operation_id)
+        .unwrap_err();
+    assert_eq!(retry_error.code, "quarantine_not_allowed");
+    let converged_status: String = fixture
+        .open_database()
+        .query_row(
+            "SELECT status FROM quarantine_entries WHERE id = ?1",
+            [&quarantine.operation_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(converged_status, "restored");
     assert_eq!(
         fixture.service.list_quarantine_entries().unwrap()[0].status,
         "restored"
@@ -1217,11 +1231,15 @@ fn purge_revalidates_quarantine_content_before_deleting() {
         .service
         .plan_purge(&quarantine.operation_id)
         .unwrap();
+    let planned_content = valid_markdown("purge-revalidate");
+    // Preserve file count and byte size so only the planned content hash can reject deletion.
+    let changed_content = planned_content.replacen("Fixture body.", "Fixture b0dy.", 1);
+    assert_eq!(changed_content.len(), planned_content.len());
     fs::write(
         fixture
             .quarantine_path(&quarantine.operation_id)
             .join("SKILL.md"),
-        valid_markdown("purge-revalidate") + "changed",
+        changed_content,
     )
     .unwrap();
 
