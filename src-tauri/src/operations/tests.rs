@@ -36,6 +36,7 @@ impl Fixture {
         let catalog = SkillCatalog::with_index_path(roots, database_path.clone());
         let service = OperationsService::new(
             Some(database_path.clone()),
+            Some(temporary.path().join("app-local")),
             catalog,
             DiagnosticService::new(None, None),
         );
@@ -78,6 +79,27 @@ impl Fixture {
 
     fn open_database(&self) -> Connection {
         Connection::open(&self.database_path).unwrap()
+    }
+
+    fn import_skill(&self, name: &str) -> super::OperationResult {
+        self.execute_plan(&self.plan_directory(self.write_valid_skill(name)))
+    }
+
+    fn quarantine_plan(&self, skill_id: &str) -> super::PlannedImport {
+        self.service.plan_quarantine(skill_id).unwrap()
+    }
+
+    fn execute_quarantine(&self, plan: &super::PlannedImport) -> super::OperationResult {
+        self.service
+            .execute_managed(&plan.confirmation_token.as_ref().unwrap().token, None)
+            .unwrap()
+    }
+
+    fn quarantine_path(&self, entry_id: &str) -> PathBuf {
+        self.temporary
+            .path()
+            .join("app-local/quarantine")
+            .join(entry_id)
     }
 }
 
@@ -444,7 +466,12 @@ fn unavailable_database_rejects_before_target_write() {
         fixture.temporary.path().join("no-db-plugin"),
     );
     let catalog = SkillCatalog::new(roots);
-    let service = OperationsService::new(None, catalog, DiagnosticService::new(None, None));
+    let service = OperationsService::new(
+        None,
+        Some(fixture.temporary.path().join("no-db-app-local")),
+        catalog,
+        DiagnosticService::new(None, None),
+    );
     let source = fixture.write_valid_skill("no-database");
     let selection = service
         .select_source(ImportSourceKind::Directory, source)
@@ -528,4 +555,465 @@ fn staging_directories(fixture: &Fixture) -> Vec<PathBuf> {
                 .map(|_| entry.path())
         })
         .collect()
+}
+
+#[test]
+fn managed_skill_quarantine_uses_app_local_directory_and_hides_source() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-rename");
+    let plan = fixture.quarantine_plan(&imported.skill_id);
+
+    let result = fixture.execute_quarantine(&plan);
+
+    assert_eq!(result.status, OperationResultStatus::Succeeded);
+    assert_eq!(
+        result.entry_id.as_deref(),
+        Some(result.operation_id.as_str())
+    );
+    assert!(!fixture.target("quarantine-rename").exists());
+    assert!(fixture
+        .quarantine_path(&result.operation_id)
+        .join("SKILL.md")
+        .is_file());
+}
+
+#[test]
+fn unknown_user_skill_requires_its_display_name_acknowledgement() {
+    let fixture = Fixture::new();
+    let target = fixture.target("unknown-user");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("SKILL.md"), valid_markdown("unknown-user")).unwrap();
+    fixture.service.catalog.scan_skills();
+    let skill_id = fixture
+        .service
+        .catalog
+        .managed_skill_id("unknown-user")
+        .unwrap();
+    let plan = fixture.quarantine_plan(&skill_id);
+
+    let error = fixture
+        .service
+        .execute_managed(&plan.confirmation_token.unwrap().token, Some("wrong"))
+        .unwrap_err();
+
+    assert_eq!(error.code, "acknowledgement_required");
+    assert!(target.exists());
+}
+
+#[test]
+fn quarantine_rejects_source_hash_change_after_confirmation() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-changed");
+    let plan = fixture.quarantine_plan(&imported.skill_id);
+    fs::write(
+        fixture.target("quarantine-changed").join("SKILL.md"),
+        format!("{}\nchanged", valid_markdown("quarantine-changed")),
+    )
+    .unwrap();
+
+    let error = fixture
+        .service
+        .execute_managed(&plan.confirmation_token.unwrap().token, None)
+        .unwrap_err();
+
+    assert_eq!(error.code, "source_changed");
+    assert!(fixture.target("quarantine-changed").exists());
+}
+
+#[test]
+fn quarantine_confirmation_expiry_and_replay_are_rejected() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-token");
+    let expired = fixture.quarantine_plan(&imported.skill_id);
+    let expired_token = expired.confirmation_token.unwrap().token;
+    fixture.service.expire_managed_confirmation(&expired_token);
+    assert_eq!(
+        fixture
+            .service
+            .execute_managed(&expired_token, None)
+            .unwrap_err()
+            .code,
+        "confirmation_token_expired"
+    );
+
+    let plan = fixture.quarantine_plan(&imported.skill_id);
+    let token = plan.confirmation_token.as_ref().unwrap().token.clone();
+    let _ = fixture.execute_quarantine(&plan);
+    assert_eq!(
+        fixture
+            .service
+            .execute_managed(&token, None)
+            .unwrap_err()
+            .code,
+        "confirmation_token_replayed"
+    );
+}
+
+#[test]
+fn copy_fallback_verifies_before_removing_source() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-copy");
+    fixture.service.force_copy_fallback();
+    let plan = fixture.quarantine_plan(&imported.skill_id);
+
+    let result = fixture.execute_quarantine(&plan);
+
+    assert_eq!(result.status, OperationResultStatus::Succeeded);
+    assert!(!fixture.target("quarantine-copy").exists());
+    assert!(fixture.quarantine_path(&result.operation_id).exists());
+}
+
+#[test]
+fn copy_verification_failure_leaves_the_original_skill_untouched() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-copy-hash");
+    fixture.service.force_copy_fallback();
+    fixture.service.force_copy_verification_failure();
+    let plan = fixture.quarantine_plan(&imported.skill_id);
+    let token = plan.confirmation_token.as_ref().unwrap().token.clone();
+
+    let error = fixture.service.execute_managed(&token, None).unwrap_err();
+
+    assert_eq!(error.code, "import_failed");
+    assert!(fixture
+        .target("quarantine-copy-hash")
+        .join("SKILL.md")
+        .is_file());
+    assert!(!fixture.quarantine_path(&plan.plan.id).exists());
+    assert!(fixture
+        .service
+        .list_quarantine_entries()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn source_remove_failure_keeps_both_copies_and_marks_partial() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-partial");
+    fixture.service.force_copy_fallback();
+    fixture.service.force_remove_failure();
+    let plan = fixture.quarantine_plan(&imported.skill_id);
+
+    let result = fixture.execute_quarantine(&plan);
+    let entry = fixture.service.list_quarantine_entries().unwrap().remove(0);
+
+    assert_eq!(result.status, OperationResultStatus::Partial);
+    assert_eq!(entry.status, "partial");
+    assert!(fixture.target("quarantine-partial").exists());
+    assert!(fixture.quarantine_path(&result.operation_id).exists());
+}
+
+#[test]
+fn quarantine_entries_survive_service_restart() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-restart");
+    let result = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let roots = ProviderRoots::new(
+        fixture.home.clone(),
+        fixture.temporary.path().join("repository"),
+        fixture.temporary.path().join("plugin-cache"),
+    );
+    let restarted = OperationsService::new(
+        Some(fixture.database_path.clone()),
+        Some(fixture.temporary.path().join("app-local")),
+        SkillCatalog::with_index_path(roots, fixture.database_path.clone()),
+        DiagnosticService::new(None, None),
+    );
+
+    let entries = restarted.list_quarantine_entries().unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, result.operation_id);
+}
+
+#[test]
+fn restore_moves_verified_quarantine_content_back_to_original_target() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("restore-success");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let restore = fixture
+        .service
+        .plan_restore(&quarantine.operation_id)
+        .unwrap();
+
+    let result = fixture
+        .service
+        .execute_managed(&restore.confirmation_token.unwrap().token, None)
+        .unwrap();
+
+    assert_eq!(result.status, OperationResultStatus::Succeeded);
+    assert!(fixture.target("restore-success").join("SKILL.md").is_file());
+    assert!(!fixture.quarantine_path(&quarantine.operation_id).exists());
+}
+
+#[test]
+fn restore_conflict_returns_plan_without_confirmation_and_never_overwrites() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("restore-conflict");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    fs::create_dir_all(fixture.target("restore-conflict")).unwrap();
+    fs::write(fixture.target("restore-conflict").join("keep.txt"), "keep").unwrap();
+
+    let plan = fixture
+        .service
+        .plan_restore(&quarantine.operation_id)
+        .unwrap();
+
+    assert_eq!(plan.plan.status, OperationPlanStatus::Conflict);
+    assert!(plan.confirmation_token.is_none());
+    assert_eq!(
+        fs::read_to_string(fixture.target("restore-conflict").join("keep.txt")).unwrap(),
+        "keep"
+    );
+}
+
+#[test]
+fn restore_rejects_changed_quarantine_content() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("restore-changed");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    fs::write(
+        fixture
+            .quarantine_path(&quarantine.operation_id)
+            .join("SKILL.md"),
+        format!("{}\nchanged", valid_markdown("restore-changed")),
+    )
+    .unwrap();
+
+    let error = fixture
+        .service
+        .plan_restore(&quarantine.operation_id)
+        .unwrap_err();
+
+    assert_eq!(error.code, "quarantine_content_changed");
+}
+
+#[test]
+fn purge_requires_exact_name_acknowledgement() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("purge-ack");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let plan = fixture
+        .service
+        .plan_purge(&quarantine.operation_id)
+        .unwrap();
+
+    let error = fixture
+        .service
+        .execute_managed(&plan.confirmation_token.unwrap().token, Some("wrong"))
+        .unwrap_err();
+
+    assert_eq!(error.code, "acknowledgement_required");
+    assert!(fixture.quarantine_path(&quarantine.operation_id).exists());
+}
+
+#[test]
+fn partial_entry_cannot_be_purged() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("purge-partial");
+    fixture.service.force_copy_fallback();
+    fixture.service.force_remove_failure();
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+
+    let error = fixture
+        .service
+        .plan_purge(&quarantine.operation_id)
+        .unwrap_err();
+
+    assert_eq!(error.code, "quarantine_partial");
+}
+
+#[cfg(unix)]
+#[test]
+fn purge_rejects_symlinked_quarantine_entry() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("purge-symlink");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let path = fixture.quarantine_path(&quarantine.operation_id);
+    fs::remove_dir_all(&path).unwrap();
+    symlink(fixture.temporary.path().join("outside"), &path).unwrap();
+
+    let error = fixture
+        .service
+        .plan_purge(&quarantine.operation_id)
+        .unwrap_err();
+
+    assert_eq!(error.code, "quarantine_not_allowed");
+}
+
+#[test]
+fn purge_rejects_entry_when_original_path_is_active_again() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("purge-active");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    fs::create_dir_all(fixture.target("purge-active")).unwrap();
+    fs::write(
+        fixture.target("purge-active").join("SKILL.md"),
+        valid_markdown("purge-active"),
+    )
+    .unwrap();
+    let plan = fixture
+        .service
+        .plan_purge(&quarantine.operation_id)
+        .unwrap();
+
+    let error = fixture
+        .service
+        .execute_managed(
+            &plan.confirmation_token.unwrap().token,
+            Some("purge-active"),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.code, "quarantine_not_allowed");
+    assert!(fixture.quarantine_path(&quarantine.operation_id).exists());
+}
+
+#[test]
+fn quarantine_list_dto_hides_hash_and_original_relative_path() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-list-dto");
+    let _ = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let serialized =
+        serde_json::to_string(&fixture.service.list_quarantine_entries().unwrap()).unwrap();
+
+    assert!(!serialized.contains("content_hash"));
+    assert!(!serialized.contains("original_relative_path"));
+}
+
+#[test]
+fn quarantine_plan_lists_each_relative_file_without_an_absolute_path() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-files");
+    fs::create_dir_all(fixture.target("quarantine-files").join("resources")).unwrap();
+    fs::write(
+        fixture
+            .target("quarantine-files")
+            .join("resources/check.md"),
+        "check",
+    )
+    .unwrap();
+    let plan = fixture.quarantine_plan(&imported.skill_id);
+    let serialized = serde_json::to_string(&plan.plan).unwrap();
+
+    assert_eq!(
+        plan.plan.impact.relative_files,
+        vec!["SKILL.md", "resources/check.md"]
+    );
+    assert!(!serialized.contains(fixture.temporary.path().to_str().unwrap()));
+}
+
+#[test]
+fn quarantine_database_row_never_contains_fixture_absolute_path() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("quarantine-private");
+    let _ = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let bytes = fs::read(&fixture.database_path).unwrap();
+
+    assert!(!bytes
+        .windows(fixture.temporary.path().as_os_str().len())
+        .any(|window| { window == fixture.temporary.path().as_os_str().as_encoded_bytes() }));
+}
+
+#[test]
+fn restore_confirmation_expiry_and_replay_are_rejected() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("restore-token");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let expired = fixture
+        .service
+        .plan_restore(&quarantine.operation_id)
+        .unwrap();
+    let token = expired.confirmation_token.unwrap().token;
+    fixture.service.expire_managed_confirmation(&token);
+    assert_eq!(
+        fixture
+            .service
+            .execute_managed(&token, None)
+            .unwrap_err()
+            .code,
+        "confirmation_token_expired"
+    );
+
+    let plan = fixture
+        .service
+        .plan_restore(&quarantine.operation_id)
+        .unwrap();
+    let replay = plan.confirmation_token.as_ref().unwrap().token.clone();
+    let _ = fixture.service.execute_managed(&replay, None).unwrap();
+    assert_eq!(
+        fixture
+            .service
+            .execute_managed(&replay, None)
+            .unwrap_err()
+            .code,
+        "confirmation_token_replayed"
+    );
+}
+
+#[test]
+fn successful_purge_removes_only_the_recorded_entry() {
+    let fixture = Fixture::new();
+    let imported = fixture.import_skill("purge-success");
+    let quarantine = fixture.execute_quarantine(&fixture.quarantine_plan(&imported.skill_id));
+    let plan = fixture
+        .service
+        .plan_purge(&quarantine.operation_id)
+        .unwrap();
+
+    let result = fixture
+        .service
+        .execute_managed(
+            &plan.confirmation_token.unwrap().token,
+            Some("purge-success"),
+        )
+        .unwrap();
+
+    assert_eq!(result.status, OperationResultStatus::Succeeded);
+    assert!(fixture
+        .service
+        .list_quarantine_entries()
+        .unwrap()
+        .is_empty());
+    assert!(!fixture.quarantine_path(&quarantine.operation_id).exists());
+}
+
+#[test]
+fn invalid_quarantine_entry_id_cannot_select_a_directory() {
+    let fixture = Fixture::new();
+    fixture.open_database().execute(
+        "INSERT INTO quarantine_entries(id, operation_id, skill_id, provider_id, original_relative_path, content_hash, display_name, file_count, total_size_bytes, status, quarantined_at) VALUES('invalid', 'invalid', 'skill', 'user_global', 'escape', 'hash', 'escape', 1, 1, 'quarantined', 1)",
+        [],
+    ).unwrap();
+
+    let error = fixture.service.plan_purge("invalid").unwrap_err();
+
+    assert_eq!(error.code, "quarantine_not_allowed");
+}
+
+#[test]
+fn read_only_provider_candidate_is_rejected_before_a_plan_is_issued() {
+    let fixture = Fixture::new();
+    let repo_skill = fixture
+        .temporary
+        .path()
+        .join("repository/.agents/skills/repo-skill");
+    fs::create_dir_all(&repo_skill).unwrap();
+    fs::write(repo_skill.join("SKILL.md"), valid_markdown("repo-skill")).unwrap();
+    fixture.service.catalog.scan_skills();
+    let skill = fixture
+        .service
+        .catalog
+        .list_skills(Default::default())
+        .skills
+        .into_iter()
+        .find(|skill| skill.provider.id == "repo")
+        .unwrap();
+
+    let error = fixture.service.plan_quarantine(&skill.id).unwrap_err();
+
+    assert_eq!(error.code, "quarantine_not_allowed");
 }

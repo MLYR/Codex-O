@@ -91,6 +91,62 @@ export interface SkillDetail {
   source?: string;
 }
 
+export type ManagementOperation =
+  | "skill_import"
+  | "skill_quarantine"
+  | "skill_restore"
+  | "quarantine_purge";
+
+export type OperationPlanStatus = "ready" | "conflict" | "partial";
+
+export interface OperationImpact {
+  target_provider_id: string;
+  skill_name: string;
+  file_count: number;
+  total_size_bytes: number;
+  relative_files: string[];
+  entry_id?: string;
+  requires_acknowledgement: boolean;
+}
+
+export interface ConfirmationToken {
+  token: string;
+  expires_at_ms: number;
+}
+
+export interface OperationPlan {
+  id: string;
+  operation: ManagementOperation;
+  status: OperationPlanStatus;
+  impact: OperationImpact;
+}
+
+export interface PlannedOperation {
+  plan: OperationPlan;
+  confirmation_token?: ConfirmationToken;
+}
+
+export interface OperationResult {
+  operation_id: string;
+  status: "succeeded" | "partial";
+  skill_id: string;
+  installed_hash: string;
+  entry_id?: string;
+}
+
+export interface QuarantineEntry {
+  id: string;
+  operation_id: string;
+  skill_id: string;
+  provider_id: string;
+  display_name: string;
+  file_count: number;
+  total_size_bytes: number;
+  status: "pending" | "quarantined" | "partial" | "restored";
+  quarantined_at: number;
+  restored_at?: number;
+}
+
 export interface CatalogError {
   code: string;
   message: string;

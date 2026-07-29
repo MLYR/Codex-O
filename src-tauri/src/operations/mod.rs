@@ -16,7 +16,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    catalog::SkillCatalog,
+    catalog::{QuarantineCandidate, SkillCatalog},
     observability::{
         DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel,
         DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult, DiagnosticService,
@@ -42,6 +42,9 @@ pub enum ImportSourceKind {
 #[serde(rename_all = "snake_case")]
 pub enum ManagementOperation {
     SkillImport,
+    SkillQuarantine,
+    SkillRestore,
+    QuarantinePurge,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -49,12 +52,14 @@ pub enum ManagementOperation {
 pub enum OperationPlanStatus {
     Ready,
     Conflict,
+    Partial,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationResultStatus {
     Succeeded,
+    Partial,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -75,6 +80,9 @@ pub struct OperationImpact {
     pub skill_name: String,
     pub file_count: usize,
     pub total_size_bytes: u64,
+    pub relative_files: Vec<String>,
+    pub entry_id: Option<String>,
+    pub requires_acknowledgement: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -97,6 +105,7 @@ pub struct OperationResult {
     pub status: OperationResultStatus,
     pub skill_id: String,
     pub installed_hash: String,
+    pub entry_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -202,6 +211,54 @@ impl OperationError {
             recovery: "Review the import plan and try again.",
         }
     }
+
+    const fn quarantine_unavailable() -> Self {
+        Self {
+            code: "quarantine_unavailable",
+            message: "The Codex-O quarantine storage is unavailable.",
+            recovery: "Restore app-local storage before managing this Skill.",
+        }
+    }
+
+    const fn quarantine_not_allowed() -> Self {
+        Self {
+            code: "quarantine_not_allowed",
+            message: "This Skill provider does not permit quarantine.",
+            recovery: "Only writable User Skills can be quarantined.",
+        }
+    }
+
+    const fn quarantine_entry_not_found() -> Self {
+        Self {
+            code: "quarantine_entry_not_found",
+            message: "The quarantine entry is unavailable.",
+            recovery: "Refresh the quarantine list and try again.",
+        }
+    }
+
+    const fn quarantine_content_changed() -> Self {
+        Self {
+            code: "quarantine_content_changed",
+            message: "The quarantined Skill changed after it was isolated.",
+            recovery: "Do not restore or purge it until the content is reviewed.",
+        }
+    }
+
+    const fn acknowledgement_required() -> Self {
+        Self {
+            code: "acknowledgement_required",
+            message: "The Skill name acknowledgement does not match.",
+            recovery: "Enter the displayed Skill name exactly before continuing.",
+        }
+    }
+
+    const fn quarantine_partial() -> Self {
+        Self {
+            code: "quarantine_partial",
+            message: "The operation kept both copies to avoid data loss.",
+            recovery: "Review the partial quarantine entry before trying another operation.",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -221,6 +278,30 @@ struct PendingConfirmation {
     consumed: bool,
 }
 
+#[derive(Clone)]
+enum PendingManagedAction {
+    Quarantine {
+        candidate: QuarantineCandidate,
+        summary: TreeSummary,
+        requires_acknowledgement: bool,
+    },
+    Restore {
+        entry: QuarantineEntry,
+        summary: TreeSummary,
+    },
+    Purge {
+        entry: QuarantineEntry,
+    },
+}
+
+#[derive(Clone)]
+struct PendingManagedConfirmation {
+    plan: OperationPlan,
+    action: PendingManagedAction,
+    expires_at_ms: u64,
+    consumed: bool,
+}
+
 #[derive(Debug)]
 struct ImportSourceSummary {
     source_hash: String,
@@ -230,31 +311,74 @@ struct ImportSourceSummary {
     files: Vec<(PathBuf, PathBuf)>,
 }
 
+#[derive(Clone, Debug)]
+struct TreeSummary {
+    content_hash: String,
+    file_count: usize,
+    total_size_bytes: u64,
+    relative_files: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct QuarantineEntry {
+    pub id: String,
+    pub operation_id: String,
+    pub skill_id: String,
+    pub provider_id: String,
+    #[serde(skip_serializing)]
+    pub original_relative_path: String,
+    #[serde(skip_serializing)]
+    pub content_hash: String,
+    pub display_name: String,
+    pub file_count: usize,
+    pub total_size_bytes: u64,
+    pub status: String,
+    pub quarantined_at: u64,
+    pub restored_at: Option<u64>,
+}
+
 pub struct OperationsService {
     database_path: Option<PathBuf>,
+    quarantine_root: Option<PathBuf>,
     target_root: PathBuf,
     catalog: SkillCatalog,
     diagnostics: Arc<DiagnosticService>,
     selections: Mutex<HashMap<String, SelectedSource>>,
     confirmations: Mutex<HashMap<String, PendingConfirmation>>,
+    managed_confirmations: Mutex<HashMap<String, PendingManagedConfirmation>>,
     import_allowed: bool,
+    #[cfg(test)]
+    force_copy_fallback: Mutex<bool>,
+    #[cfg(test)]
+    force_remove_failure: Mutex<bool>,
+    #[cfg(test)]
+    force_copy_verification_failure: Mutex<bool>,
 }
 
 impl OperationsService {
     pub fn new(
         database_path: Option<PathBuf>,
+        app_local_data_root: Option<PathBuf>,
         catalog: SkillCatalog,
         diagnostics: Arc<DiagnosticService>,
     ) -> Self {
         let target_root = catalog.managed_user_root();
         Self {
             database_path,
+            quarantine_root: app_local_data_root.map(|root| root.join("quarantine")),
             target_root,
             catalog,
             diagnostics,
             selections: Mutex::new(HashMap::new()),
             confirmations: Mutex::new(HashMap::new()),
+            managed_confirmations: Mutex::new(HashMap::new()),
             import_allowed: true,
+            #[cfg(test)]
+            force_copy_fallback: Mutex::new(false),
+            #[cfg(test)]
+            force_remove_failure: Mutex::new(false),
+            #[cfg(test)]
+            force_copy_verification_failure: Mutex::new(false),
         }
     }
 
@@ -311,6 +435,13 @@ impl OperationsService {
                 skill_name: source.target_name,
                 file_count: source.file_count,
                 total_size_bytes: source.total_size_bytes,
+                relative_files: source
+                    .files
+                    .iter()
+                    .filter_map(|(relative, _)| relative.to_str().map(str::to_owned))
+                    .collect(),
+                entry_id: None,
+                requires_acknowledgement: false,
             },
         };
         if conflict {
@@ -415,6 +546,7 @@ impl OperationsService {
                 status: OperationResultStatus::Succeeded,
                 skill_id,
                 installed_hash: facts.content_hash,
+                entry_id: None,
             })
         })();
         if execution.is_err() {
@@ -437,6 +569,289 @@ impl OperationsService {
         execution
     }
 
+    fn plan_quarantine(&self, skill_id: &str) -> Result<PlannedImport, OperationError> {
+        self.ensure_audit_store()?;
+        let candidate = self
+            .catalog
+            .quarantine_candidate(skill_id)
+            .map_err(|_| OperationError::quarantine_entry_not_found())?;
+        if !candidate.can_quarantine {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        let summary = summarize_tree(&candidate.directory)?;
+        let requires_acknowledgement = !self.is_managed_skill(&candidate.id)?;
+        let plan = OperationPlan {
+            id: random_token().ok_or_else(OperationError::selection_unavailable)?,
+            operation: ManagementOperation::SkillQuarantine,
+            status: OperationPlanStatus::Ready,
+            impact: OperationImpact {
+                target_provider_id: candidate.provider_id.clone(),
+                skill_name: candidate.display_name.clone(),
+                file_count: summary.file_count,
+                total_size_bytes: summary.total_size_bytes,
+                relative_files: summary.relative_files.clone(),
+                entry_id: None,
+                requires_acknowledgement,
+            },
+        };
+        self.issue_managed_confirmation(
+            plan,
+            PendingManagedAction::Quarantine {
+                candidate,
+                summary,
+                requires_acknowledgement,
+            },
+        )
+    }
+
+    fn plan_restore(&self, entry_id: &str) -> Result<PlannedImport, OperationError> {
+        let entry = self.load_quarantine_entry(entry_id)?;
+        if entry.status != "quarantined" || !self.catalog.provider_can_restore(&entry.provider_id) {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        let source = self.quarantine_entry_path(&entry)?;
+        let summary = summarize_tree(&source)?;
+        if summary.content_hash != entry.content_hash {
+            return Err(OperationError::quarantine_content_changed());
+        }
+        let target = self.target_root.join(&entry.original_relative_path);
+        let conflict = path_exists(&target);
+        let plan = OperationPlan {
+            id: random_token().ok_or_else(OperationError::selection_unavailable)?,
+            operation: ManagementOperation::SkillRestore,
+            status: if conflict {
+                OperationPlanStatus::Conflict
+            } else {
+                OperationPlanStatus::Ready
+            },
+            impact: OperationImpact {
+                target_provider_id: entry.provider_id.clone(),
+                skill_name: entry.display_name.clone(),
+                file_count: summary.file_count,
+                total_size_bytes: summary.total_size_bytes,
+                relative_files: summary.relative_files.clone(),
+                entry_id: Some(entry.id.clone()),
+                requires_acknowledgement: false,
+            },
+        };
+        if conflict {
+            self.emit_failure(DiagnosticErrorCode::OperationConflict);
+            return Ok(PlannedImport {
+                plan,
+                confirmation_token: None,
+            });
+        }
+        self.issue_managed_confirmation(plan, PendingManagedAction::Restore { entry, summary })
+    }
+
+    fn plan_purge(&self, entry_id: &str) -> Result<PlannedImport, OperationError> {
+        let entry = self.load_quarantine_entry(entry_id)?;
+        if entry.status == "partial" {
+            return Err(OperationError::quarantine_partial());
+        }
+        if entry.status != "quarantined" {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        let source = self.quarantine_entry_path(&entry)?;
+        let summary = summarize_tree(&source)?;
+        if summary.content_hash != entry.content_hash {
+            return Err(OperationError::quarantine_content_changed());
+        }
+        let plan = OperationPlan {
+            id: random_token().ok_or_else(OperationError::selection_unavailable)?,
+            operation: ManagementOperation::QuarantinePurge,
+            status: OperationPlanStatus::Ready,
+            impact: OperationImpact {
+                target_provider_id: entry.provider_id.clone(),
+                skill_name: entry.display_name.clone(),
+                file_count: entry.file_count,
+                total_size_bytes: entry.total_size_bytes,
+                relative_files: summary.relative_files,
+                entry_id: Some(entry.id.clone()),
+                requires_acknowledgement: true,
+            },
+        };
+        self.issue_managed_confirmation(plan, PendingManagedAction::Purge { entry })
+    }
+
+    fn execute_managed(
+        &self,
+        confirmation_token: &str,
+        acknowledgement: Option<&str>,
+    ) -> Result<OperationResult, OperationError> {
+        let confirmation = self.consume_managed_confirmation(confirmation_token)?;
+        match confirmation.action {
+            PendingManagedAction::Quarantine {
+                candidate,
+                summary,
+                requires_acknowledgement,
+            } => {
+                if requires_acknowledgement
+                    && acknowledgement.map(str::trim) != Some(candidate.display_name.as_str())
+                {
+                    return Err(OperationError::acknowledgement_required());
+                }
+                let current = summarize_tree(&candidate.directory)?;
+                if current.content_hash != summary.content_hash {
+                    return Err(OperationError::source_changed());
+                }
+                let entry = QuarantineEntry {
+                    id: confirmation.plan.id.clone(),
+                    operation_id: confirmation.plan.id.clone(),
+                    skill_id: candidate.id.clone(),
+                    provider_id: candidate.provider_id.clone(),
+                    original_relative_path: candidate.relative_path.clone(),
+                    content_hash: summary.content_hash.clone(),
+                    display_name: candidate.display_name.clone(),
+                    file_count: summary.file_count,
+                    total_size_bytes: summary.total_size_bytes,
+                    status: "pending".to_owned(),
+                    quarantined_at: now_ms(),
+                    restored_at: None,
+                };
+                self.insert_quarantine_entry(&entry, &confirmation.plan)?;
+                let destination = self.quarantine_entry_path(&entry)?;
+                let outcome = match self.move_tree(&candidate.directory, &destination) {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        let _ = self.delete_quarantine_entry(&entry.id);
+                        return Err(error);
+                    }
+                };
+                let status = if outcome == MoveOutcome::Partial {
+                    "partial"
+                } else {
+                    "quarantined"
+                };
+                if let Err(error) = self.update_quarantine_status(&entry.id, status, None) {
+                    if outcome == MoveOutcome::Succeeded
+                        && self.move_tree(&destination, &candidate.directory).is_ok()
+                    {
+                        let _ = self.delete_quarantine_entry(&entry.id);
+                        return Err(error);
+                    }
+                    let _ = self.update_quarantine_status(&entry.id, "partial", None);
+                    return Err(OperationError::quarantine_partial());
+                }
+                self.catalog.scan_skills();
+                Ok(OperationResult {
+                    operation_id: confirmation.plan.id,
+                    status: if outcome == MoveOutcome::Partial {
+                        OperationResultStatus::Partial
+                    } else {
+                        OperationResultStatus::Succeeded
+                    },
+                    skill_id: candidate.id,
+                    installed_hash: summary.content_hash,
+                    entry_id: Some(entry.id),
+                })
+            }
+            PendingManagedAction::Restore { entry, summary } => {
+                let source = self.quarantine_entry_path(&entry)?;
+                let current = summarize_tree(&source)?;
+                if current.content_hash != summary.content_hash
+                    || current.content_hash != entry.content_hash
+                {
+                    return Err(OperationError::quarantine_content_changed());
+                }
+                let target = self.target_root.join(&entry.original_relative_path);
+                if path_exists(&target) {
+                    return Err(OperationError::conflict_detected());
+                }
+                let outcome = self.move_tree(&source, &target)?;
+                let restored_at = now_ms();
+                let status = if outcome == MoveOutcome::Partial {
+                    "partial"
+                } else {
+                    "restored"
+                };
+                self.update_quarantine_status(&entry.id, status, Some(restored_at))?;
+                self.catalog.scan_skills();
+                Ok(OperationResult {
+                    operation_id: confirmation.plan.id,
+                    status: if outcome == MoveOutcome::Partial {
+                        OperationResultStatus::Partial
+                    } else {
+                        OperationResultStatus::Succeeded
+                    },
+                    skill_id: entry.skill_id,
+                    installed_hash: entry.content_hash,
+                    entry_id: Some(entry.id),
+                })
+            }
+            PendingManagedAction::Purge { entry } => {
+                if acknowledgement.map(str::trim) != Some(entry.display_name.as_str()) {
+                    return Err(OperationError::acknowledgement_required());
+                }
+                let source = self.quarantine_entry_path(&entry)?;
+                let active_target = self.target_root.join(&entry.original_relative_path);
+                if source.is_symlink()
+                    || path_exists(&active_target)
+                    || self
+                        .catalog
+                        .managed_skill_id(&entry.original_relative_path)
+                        .is_some()
+                {
+                    return Err(OperationError::quarantine_not_allowed());
+                }
+                fs::remove_dir_all(&source).map_err(|_| OperationError::import_failed())?;
+                self.delete_quarantine_entry(&entry.id)?;
+                Ok(OperationResult {
+                    operation_id: confirmation.plan.id,
+                    status: OperationResultStatus::Succeeded,
+                    skill_id: entry.skill_id,
+                    installed_hash: entry.content_hash,
+                    entry_id: Some(entry.id),
+                })
+            }
+        }
+    }
+
+    fn issue_managed_confirmation(
+        &self,
+        plan: OperationPlan,
+        action: PendingManagedAction,
+    ) -> Result<PlannedImport, OperationError> {
+        let token = random_token().ok_or_else(OperationError::selection_unavailable)?;
+        let expires_at_ms = now_ms().saturating_add(CONFIRMATION_TTL_MS);
+        lock_unpoisoned(&self.managed_confirmations).insert(
+            token.clone(),
+            PendingManagedConfirmation {
+                plan: plan.clone(),
+                action,
+                expires_at_ms,
+                consumed: false,
+            },
+        );
+        Ok(PlannedImport {
+            plan,
+            confirmation_token: Some(ConfirmationToken {
+                token,
+                expires_at_ms,
+            }),
+        })
+    }
+
+    fn consume_managed_confirmation(
+        &self,
+        confirmation_token: &str,
+    ) -> Result<PendingManagedConfirmation, OperationError> {
+        let now = now_ms();
+        let mut confirmations = lock_unpoisoned(&self.managed_confirmations);
+        let confirmation = confirmations
+            .get_mut(confirmation_token)
+            .ok_or_else(OperationError::confirmation_token_invalid)?;
+        if confirmation.expires_at_ms <= now {
+            confirmations.remove(confirmation_token);
+            return Err(OperationError::confirmation_token_expired());
+        }
+        if confirmation.consumed {
+            return Err(OperationError::confirmation_token_replayed());
+        }
+        confirmation.consumed = true;
+        Ok(confirmation.clone())
+    }
+
     fn consume_confirmation(
         &self,
         confirmation_token: &str,
@@ -457,6 +872,186 @@ impl OperationsService {
         Ok(confirmation.clone())
     }
 
+    fn is_managed_skill(&self, skill_id: &str) -> Result<bool, OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM install_receipts WHERE skill_id = ?1 AND managed_by = 'codex-o')",
+                params![skill_id],
+                |row| row.get::<_, bool>(0),
+            )
+            .map_err(|_| OperationError::database_unavailable())
+    }
+
+    fn quarantine_root(&self) -> Result<&Path, OperationError> {
+        self.quarantine_root
+            .as_deref()
+            .ok_or_else(OperationError::quarantine_unavailable)
+    }
+
+    fn quarantine_entry_path(&self, entry: &QuarantineEntry) -> Result<PathBuf, OperationError> {
+        if entry.id != entry.operation_id || !valid_operation_id(&entry.operation_id) {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        let root = self.quarantine_root()?;
+        let root_metadata = fs::symlink_metadata(root).ok();
+        if root_metadata.is_some_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        let path = root.join(&entry.operation_id);
+        if path.parent() != Some(root) {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        Ok(path)
+    }
+
+    fn load_quarantine_entry(&self, entry_id: &str) -> Result<QuarantineEntry, OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        connection
+            .query_row(
+                "SELECT id, operation_id, skill_id, provider_id, original_relative_path, content_hash, display_name, file_count, total_size_bytes, status, quarantined_at, restored_at FROM quarantine_entries WHERE id = ?1",
+                params![entry_id],
+                |row| {
+                    Ok(QuarantineEntry {
+                        id: row.get(0)?,
+                        operation_id: row.get(1)?,
+                        skill_id: row.get(2)?,
+                        provider_id: row.get(3)?,
+                        original_relative_path: row.get(4)?,
+                        content_hash: row.get(5)?,
+                        display_name: row.get(6)?,
+                        file_count: row.get::<_, i64>(7)? as usize,
+                        total_size_bytes: row.get::<_, i64>(8)? as u64,
+                        status: row.get(9)?,
+                        quarantined_at: row.get::<_, i64>(10)? as u64,
+                        restored_at: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+                    })
+                },
+            )
+            .map_err(|_| OperationError::quarantine_entry_not_found())
+    }
+
+    fn list_quarantine_entries(&self) -> Result<Vec<QuarantineEntry>, OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let mut statement = connection
+            .prepare("SELECT id, operation_id, skill_id, provider_id, original_relative_path, content_hash, display_name, file_count, total_size_bytes, status, quarantined_at, restored_at FROM quarantine_entries ORDER BY quarantined_at DESC")
+            .map_err(|_| OperationError::database_unavailable())?;
+        let entries = statement
+            .query_map([], |row| {
+                Ok(QuarantineEntry {
+                    id: row.get(0)?,
+                    operation_id: row.get(1)?,
+                    skill_id: row.get(2)?,
+                    provider_id: row.get(3)?,
+                    original_relative_path: row.get(4)?,
+                    content_hash: row.get(5)?,
+                    display_name: row.get(6)?,
+                    file_count: row.get::<_, i64>(7)? as usize,
+                    total_size_bytes: row.get::<_, i64>(8)? as u64,
+                    status: row.get(9)?,
+                    quarantined_at: row.get::<_, i64>(10)? as u64,
+                    restored_at: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
+                })
+            })
+            .map_err(|_| OperationError::database_unavailable())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| OperationError::database_unavailable())?;
+        Ok(entries)
+    }
+
+    fn insert_quarantine_entry(
+        &self,
+        entry: &QuarantineEntry,
+        plan: &OperationPlan,
+    ) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let mut connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let plan_json = serde_json::to_string(plan).map_err(|_| OperationError::import_failed())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| OperationError::database_unavailable())?;
+        transaction.execute(
+            "INSERT INTO quarantine_entries(id, operation_id, skill_id, provider_id, original_relative_path, content_hash, display_name, file_count, total_size_bytes, status, quarantined_at, restored_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, NULL)",
+            params![entry.id, entry.operation_id, entry.skill_id, entry.provider_id, entry.original_relative_path, entry.content_hash, entry.display_name, entry.file_count as i64, entry.total_size_bytes as i64, entry.quarantined_at as i64],
+        ).map_err(|_| OperationError::database_unavailable())?;
+        transaction.execute(
+            "INSERT INTO management_operations(id, skill_id, operation, status, plan_json, result_json, created_at, completed_at) VALUES(?1, ?2, 'skill_quarantine', 'pending', ?3, NULL, ?4, NULL)",
+            params![plan.id, entry.skill_id, plan_json, entry.quarantined_at as i64],
+        ).map_err(|_| OperationError::database_unavailable())?;
+        transaction
+            .commit()
+            .map_err(|_| OperationError::database_unavailable())
+    }
+
+    fn update_quarantine_status(
+        &self,
+        entry_id: &str,
+        status: &str,
+        restored_at: Option<u64>,
+    ) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        connection.execute(
+            "UPDATE quarantine_entries SET status = ?2, restored_at = COALESCE(?3, restored_at) WHERE id = ?1",
+            params![entry_id, status, restored_at.map(|value| value as i64)],
+        ).map_err(|_| OperationError::database_unavailable())?;
+        connection.execute(
+            "UPDATE management_operations SET status = ?2, result_json = ?3, completed_at = ?4 WHERE id = ?1",
+            params![entry_id, status, serde_json::to_string(status).map_err(|_| OperationError::import_failed())?, now_ms() as i64],
+        ).map_err(|_| OperationError::database_unavailable())?;
+        Ok(())
+    }
+
+    fn delete_quarantine_entry(&self, entry_id: &str) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let mut connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| OperationError::database_unavailable())?;
+        transaction
+            .execute(
+                "DELETE FROM quarantine_entries WHERE id = ?1",
+                params![entry_id],
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        transaction
+            .execute(
+                "DELETE FROM management_operations WHERE id = ?1",
+                params![entry_id],
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        transaction
+            .commit()
+            .map_err(|_| OperationError::database_unavailable())
+    }
+
     fn ensure_audit_store(&self) -> Result<(), OperationError> {
         let path = self
             .database_path
@@ -474,6 +1069,29 @@ impl OperationsService {
             .join(format!(".codex-o-import-{operation_id}"));
         fs::create_dir(&staging_home).map_err(|_| OperationError::import_failed())?;
         Ok(staging_home)
+    }
+
+    fn move_tree(&self, source: &Path, destination: &Path) -> Result<MoveOutcome, OperationError> {
+        #[cfg(test)]
+        let force_copy_fallback = *lock_unpoisoned(&self.force_copy_fallback);
+        #[cfg(not(test))]
+        let force_copy_fallback = false;
+        #[cfg(test)]
+        let force_remove_failure = *lock_unpoisoned(&self.force_remove_failure);
+        #[cfg(not(test))]
+        let force_remove_failure = false;
+        #[cfg(test)]
+        let force_copy_verification_failure =
+            *lock_unpoisoned(&self.force_copy_verification_failure);
+        #[cfg(not(test))]
+        let force_copy_verification_failure = false;
+        move_tree(
+            source,
+            destination,
+            force_copy_fallback,
+            force_remove_failure,
+            force_copy_verification_failure,
+        )
     }
 
     fn persist_success(
@@ -540,6 +1158,28 @@ impl OperationsService {
             confirmation.expires_at_ms = 0;
         }
     }
+
+    #[cfg(test)]
+    fn expire_managed_confirmation(&self, token: &str) {
+        if let Some(confirmation) = lock_unpoisoned(&self.managed_confirmations).get_mut(token) {
+            confirmation.expires_at_ms = 0;
+        }
+    }
+
+    #[cfg(test)]
+    fn force_copy_fallback(&self) {
+        *lock_unpoisoned(&self.force_copy_fallback) = true;
+    }
+
+    #[cfg(test)]
+    fn force_remove_failure(&self) {
+        *lock_unpoisoned(&self.force_remove_failure) = true;
+    }
+
+    #[cfg(test)]
+    fn force_copy_verification_failure(&self) {
+        *lock_unpoisoned(&self.force_copy_verification_failure) = true;
+    }
 }
 
 #[tauri::command]
@@ -573,6 +1213,63 @@ pub fn execute_skill_import(
     confirmation_token: String,
 ) -> Result<OperationResult, OperationError> {
     operations.execute_import(&confirmation_token)
+}
+
+#[tauri::command]
+pub fn plan_skill_quarantine(
+    operations: State<'_, Arc<OperationsService>>,
+    skill_id: String,
+) -> Result<PlannedImport, OperationError> {
+    operations.plan_quarantine(&skill_id)
+}
+
+#[tauri::command]
+pub fn execute_skill_quarantine(
+    operations: State<'_, Arc<OperationsService>>,
+    confirmation_token: String,
+    acknowledgement: Option<String>,
+) -> Result<OperationResult, OperationError> {
+    operations.execute_managed(&confirmation_token, acknowledgement.as_deref())
+}
+
+#[tauri::command]
+pub fn list_quarantine_entries(
+    operations: State<'_, Arc<OperationsService>>,
+) -> Result<Vec<QuarantineEntry>, OperationError> {
+    operations.list_quarantine_entries()
+}
+
+#[tauri::command]
+pub fn plan_skill_restore(
+    operations: State<'_, Arc<OperationsService>>,
+    entry_id: String,
+) -> Result<PlannedImport, OperationError> {
+    operations.plan_restore(&entry_id)
+}
+
+#[tauri::command]
+pub fn execute_skill_restore(
+    operations: State<'_, Arc<OperationsService>>,
+    confirmation_token: String,
+) -> Result<OperationResult, OperationError> {
+    operations.execute_managed(&confirmation_token, None)
+}
+
+#[tauri::command]
+pub fn plan_quarantine_purge(
+    operations: State<'_, Arc<OperationsService>>,
+    entry_id: String,
+) -> Result<PlannedImport, OperationError> {
+    operations.plan_purge(&entry_id)
+}
+
+#[tauri::command]
+pub fn execute_quarantine_purge(
+    operations: State<'_, Arc<OperationsService>>,
+    confirmation_token: String,
+    acknowledgement: String,
+) -> Result<OperationResult, OperationError> {
+    operations.execute_managed(&confirmation_token, Some(&acknowledgement))
 }
 
 fn inspect_source(
@@ -659,6 +1356,136 @@ fn inspect_source(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MoveOutcome {
+    Succeeded,
+    Partial,
+}
+
+fn move_tree(
+    source: &Path,
+    destination: &Path,
+    force_copy_fallback: bool,
+    force_remove_failure: bool,
+    force_copy_verification_failure: bool,
+) -> Result<MoveOutcome, OperationError> {
+    let source_summary = summarize_tree(source)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(OperationError::quarantine_unavailable)?;
+    fs::create_dir_all(parent).map_err(|_| OperationError::quarantine_unavailable())?;
+    if fs::symlink_metadata(destination).is_ok() {
+        return Err(OperationError::conflict_detected());
+    }
+    if !force_copy_fallback && fs::rename(source, destination).is_ok() {
+        return Ok(MoveOutcome::Succeeded);
+    }
+    if let Err(error) = copy_tree(source, destination) {
+        let _ = fs::remove_dir_all(destination);
+        return Err(error);
+    }
+    if force_copy_verification_failure {
+        let path = destination.join(SKILL_MARKDOWN_FILE);
+        let mut bytes = fs::read(&path).map_err(|_| OperationError::import_failed())?;
+        let first = bytes
+            .first_mut()
+            .ok_or_else(OperationError::import_failed)?;
+        *first ^= 1;
+        fs::write(path, bytes).map_err(|_| OperationError::import_failed())?;
+    }
+    let copied_summary = summarize_tree(destination)?;
+    if copied_summary.content_hash != source_summary.content_hash
+        || copied_summary.file_count != source_summary.file_count
+        || copied_summary.total_size_bytes != source_summary.total_size_bytes
+    {
+        let _ = fs::remove_dir_all(destination);
+        return Err(OperationError::import_failed());
+    }
+    if force_remove_failure {
+        return Ok(MoveOutcome::Partial);
+    }
+    match fs::remove_dir_all(source) {
+        Ok(()) => Ok(MoveOutcome::Succeeded),
+        Err(_) => Ok(MoveOutcome::Partial),
+    }
+}
+
+fn summarize_tree(root: &Path) -> Result<TreeSummary, OperationError> {
+    let metadata =
+        fs::symlink_metadata(root).map_err(|_| OperationError::quarantine_entry_not_found())?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(OperationError::quarantine_not_allowed());
+    }
+    let mut files = Vec::new();
+    collect_tree_files(root, Path::new(""), &mut files)?;
+    if !files
+        .iter()
+        .any(|(relative, _)| relative == Path::new(SKILL_MARKDOWN_FILE))
+    {
+        return Err(OperationError::import_source_invalid());
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut digest = Sha256::new();
+    let mut total_size_bytes = 0_u64;
+    let mut relative_files = Vec::with_capacity(files.len());
+    for (relative, path) in files {
+        let relative_text = relative
+            .to_str()
+            .filter(|value| valid_relative_path(value))
+            .ok_or_else(OperationError::import_source_invalid)?;
+        let metadata = fs::metadata(&path).map_err(|_| OperationError::import_source_invalid())?;
+        total_size_bytes = total_size_bytes.saturating_add(metadata.len());
+        digest.update((relative_text.len() as u64).to_be_bytes());
+        digest.update(relative_text.as_bytes());
+        hash_file(&path, &mut digest)?;
+        relative_files.push(relative_text.to_owned());
+    }
+    Ok(TreeSummary {
+        content_hash: format!("{:x}", digest.finalize()),
+        file_count: relative_files.len(),
+        total_size_bytes,
+        relative_files,
+    })
+}
+
+fn collect_tree_files(
+    root: &Path,
+    relative_directory: &Path,
+    files: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<(), OperationError> {
+    for entry in fs::read_dir(root.join(relative_directory))
+        .map_err(|_| OperationError::import_source_invalid())?
+    {
+        let entry = entry.map_err(|_| OperationError::import_source_invalid())?;
+        let relative = relative_directory.join(entry.file_name());
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|_| OperationError::import_source_invalid())?;
+        if metadata.file_type().is_symlink() {
+            return Err(OperationError::quarantine_not_allowed());
+        }
+        if metadata.is_dir() {
+            collect_tree_files(root, &relative, files)?;
+        } else if metadata.is_file() {
+            files.push((relative, entry.path()));
+        } else {
+            return Err(OperationError::import_source_invalid());
+        }
+    }
+    Ok(())
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> Result<(), OperationError> {
+    let summary = summarize_tree(source)?;
+    for relative in summary.relative_files {
+        let from = source.join(&relative);
+        let to = destination.join(&relative);
+        let parent = to.parent().ok_or_else(OperationError::import_failed)?;
+        fs::create_dir_all(parent).map_err(|_| OperationError::import_failed())?;
+        fs::copy(from, to).map_err(|_| OperationError::import_failed())?;
+    }
+    Ok(())
+}
+
 fn collect_source_files(
     root: &Path,
     relative_directory: &Path,
@@ -729,6 +1556,10 @@ fn valid_skill_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         && !name.starts_with('-')
         && !name.ends_with('-')
+}
+
+fn valid_operation_id(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn valid_relative_path(path: &str) -> bool {

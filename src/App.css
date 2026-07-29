@@ -312,6 +312,78 @@ input {
   margin-bottom: var(--space-5);
 }
 
+.skills-header-actions,
+.quarantine-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quarantine-panel {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.quarantine-list {
+  display: grid;
+  gap: 8px;
+  margin: 20px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.quarantine-list > li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--border-color, #dfe3ea);
+  border-radius: 6px;
+  padding: 12px 14px;
+}
+
+.quarantine-list strong,
+.quarantine-list small,
+.quarantine-list span {
+  display: block;
+}
+
+.quarantine-list small,
+.quarantine-list span {
+  color: var(--text-muted, #667085);
+  margin-top: 4px;
+}
+
+.operation-dialog {
+  max-width: 560px;
+}
+
+.operation-file-list {
+  max-height: 180px;
+  overflow: auto;
+  margin: 12px 0;
+  padding-left: 20px;
+}
+
+.acknowledgement-field {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0;
+}
+
+.acknowledgement-field input {
+  min-height: 36px;
+}
+
+@media (max-width: 700px) {
+  .skills-page-header,
+  .quarantine-list > li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .skills-page h1,
 .skill-detail h1 {
   margin: 0;

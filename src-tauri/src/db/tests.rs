@@ -14,6 +14,7 @@ const REQUIRED_TABLES: &[&str] = &[
     "install_receipts",
     "management_operations",
     "providers",
+    "quarantine_entries",
     "skill_analyses",
     "skills",
 ];
@@ -129,6 +130,23 @@ fn v1_schema_matches_design_columns() {
             "result_json",
             "created_at",
             "completed_at",
+        ]
+    );
+    assert_eq!(
+        fixture.table_columns("quarantine_entries"),
+        vec![
+            "id",
+            "operation_id",
+            "skill_id",
+            "provider_id",
+            "original_relative_path",
+            "content_hash",
+            "display_name",
+            "file_count",
+            "total_size_bytes",
+            "status",
+            "quarantined_at",
+            "restored_at",
         ]
     );
 }

@@ -9,6 +9,9 @@ import type {
   SkillDetail,
   SkillList,
   SkillListQuery,
+  OperationResult,
+  PlannedOperation,
+  QuarantineEntry,
 } from "./types";
 
 export const skillCatalogApi = {
@@ -29,4 +32,17 @@ export const skillCatalogApi = {
     invoke<EvidenceExcerpt>("read_evidence_excerpt", { evidenceId }),
   compareSkills: (skillIds: [string, string]) =>
     invoke<SkillComparison>("compare_skills", { skillIds }),
+  planQuarantine: (skillId: string) =>
+    invoke<PlannedOperation>("plan_skill_quarantine", { skillId }),
+  executeQuarantine: (confirmationToken: string, acknowledgement?: string) =>
+    invoke<OperationResult>("execute_skill_quarantine", { confirmationToken, acknowledgement }),
+  listQuarantineEntries: () => invoke<QuarantineEntry[]>("list_quarantine_entries"),
+  planRestore: (entryId: string) =>
+    invoke<PlannedOperation>("plan_skill_restore", { entryId }),
+  executeRestore: (confirmationToken: string) =>
+    invoke<OperationResult>("execute_skill_restore", { confirmationToken }),
+  planPurge: (entryId: string) =>
+    invoke<PlannedOperation>("plan_quarantine_purge", { entryId }),
+  executePurge: (confirmationToken: string, acknowledgement: string) =>
+    invoke<OperationResult>("execute_quarantine_purge", { confirmationToken, acknowledgement }),
 };

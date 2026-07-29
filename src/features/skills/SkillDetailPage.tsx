@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   AlertCircle,
+  Archive,
   ArrowLeft,
   BrainCircuit,
   ChevronDown,
@@ -18,6 +19,7 @@ import {
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { skillCatalogApi } from "./api";
+import { OperationDialog } from "./QuarantinePanel";
 import { diagnosticLabel, formatBytes, formatUpdatedAt, scopeLabel } from "./format";
 import type {
   AnalysisProgress,
@@ -28,6 +30,7 @@ import type {
   SkillDetail,
   SkillPassport,
   SkillSummary,
+  PlannedOperation,
 } from "./types";
 
 const terminalAnalysisStatuses = new Set([
@@ -53,6 +56,8 @@ export function SkillDetailPage() {
   const [isLoadingSource, setIsLoadingSource] = useState(false);
   const [isSourceExpanded, setIsSourceExpanded] = useState(false);
   const [busyAction, setBusyAction] = useState<string>();
+  const [quarantinePlan, setQuarantinePlan] = useState<PlannedOperation>();
+  const [quarantineAcknowledgement, setQuarantineAcknowledgement] = useState("");
 
   const refreshAnalysis = async (id: string) => {
     try {
@@ -191,6 +196,41 @@ export function SkillDetailPage() {
     }
   };
 
+  const planQuarantine = async () => {
+    if (!skillId) {
+      return;
+    }
+    setBusyAction("quarantine");
+    try {
+      const planned = await skillCatalogApi.planQuarantine(skillId);
+      setQuarantinePlan(planned);
+      setQuarantineAcknowledgement("");
+      setAnalysisError(undefined);
+    } catch {
+      setAnalysisError("quarantine_not_allowed");
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
+  const executeQuarantine = async () => {
+    if (!quarantinePlan?.confirmation_token) {
+      return;
+    }
+    setBusyAction("quarantine");
+    try {
+      await skillCatalogApi.executeQuarantine(
+        quarantinePlan.confirmation_token.token,
+        quarantineAcknowledgement || undefined,
+      );
+      navigate("/skills");
+    } catch {
+      setAnalysisError("operation_failed");
+    } finally {
+      setBusyAction(undefined);
+    }
+  };
+
   if (isLoading) {
     return <DetailState title="正在读取 Skill 详情" detail="仅加载安全的静态信息。" />;
   }
@@ -225,10 +265,11 @@ export function SkillDetailPage() {
           <h1 id="skill-detail-title">{summary.display_name}</h1>
           <p>{summary.description || "未提供静态描述"}</p>
         </div>
-        <div className="detail-readonly">
-          <ShieldCheck size={16} aria-hidden="true" />
-          只读
-        </div>
+        {summary.provider.capabilities.can_quarantine ? (
+          <button className="danger-button" type="button" disabled={busyAction === "quarantine"} onClick={() => void planQuarantine()}>
+            <Archive size={16} aria-hidden="true" />隔离
+          </button>
+        ) : <div className="detail-readonly"><ShieldCheck size={16} aria-hidden="true" />此来源只读</div>}
       </header>
 
       <section className="detail-facts" aria-label="Skill 静态信息">
@@ -415,6 +456,7 @@ export function SkillDetailPage() {
           </pre>
         ) : null}
       </section>
+      {quarantinePlan ? <OperationDialog planned={quarantinePlan} acknowledgement={quarantineAcknowledgement} onAcknowledgement={setQuarantineAcknowledgement} busy={busyAction === "quarantine"} onClose={() => setQuarantinePlan(undefined)} onConfirm={() => void executeQuarantine()} /> : null}
     </article>
   );
 }

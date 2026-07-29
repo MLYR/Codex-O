@@ -127,6 +127,7 @@ pub fn run() {
             app.manage(Arc::clone(&diagnostics));
             app.manage(Arc::new(operations::OperationsService::new(
                 database_path.clone(),
+                app_local_data_directory.clone(),
                 catalog.clone(),
                 Arc::clone(&diagnostics),
             )));
@@ -164,7 +165,14 @@ pub fn run() {
             observability::clear_diagnostics,
             operations::select_import_source,
             operations::plan_skill_import,
-            operations::execute_skill_import
+            operations::execute_skill_import,
+            operations::plan_skill_quarantine,
+            operations::execute_skill_quarantine,
+            operations::list_quarantine_entries,
+            operations::plan_skill_restore,
+            operations::execute_skill_restore,
+            operations::plan_quarantine_purge,
+            operations::execute_quarantine_purge
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

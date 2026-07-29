@@ -57,6 +57,18 @@ pub(crate) struct ImportStagedSkill {
     pub description: Option<String>,
 }
 
+/// Internal-only source selected by a stable Skill id for a destructive operation.
+/// The directory is deliberately never serialized across the Tauri boundary.
+#[derive(Clone, Debug)]
+pub(crate) struct QuarantineCandidate {
+    pub id: String,
+    pub provider_id: String,
+    pub relative_path: String,
+    pub display_name: String,
+    pub can_quarantine: bool,
+    pub directory: PathBuf,
+}
+
 impl SkillCatalog {
     pub fn new(roots: ProviderRoots) -> Self {
         let preferences = ScanPreferences {
@@ -295,6 +307,50 @@ impl SkillCatalog {
             .snapshot
             .map(|snapshot| snapshot.content_hash)
             .ok_or_else(CatalogError::analysis_unavailable)
+    }
+
+    pub(crate) fn quarantine_candidate(
+        &self,
+        skill_id: &str,
+    ) -> Result<QuarantineCandidate, CatalogError> {
+        let discovered = ProviderRegistry::with_roots(self.roots_for_scan()).discover_all();
+        let skill = discovered
+            .skills
+            .into_iter()
+            .find(|skill| skill.id == skill_id)
+            .ok_or_else(CatalogError::skill_not_found)?;
+        let provider = discovered
+            .providers
+            .iter()
+            .find(|provider| provider.id == skill.provider_id)
+            .ok_or_else(CatalogError::skill_not_found)?;
+        let display_name = self
+            .cached_snapshot_from_memory_or_index()
+            .and_then(|snapshot| {
+                snapshot
+                    .entries
+                    .into_iter()
+                    .find(|entry| entry.summary.id == skill_id)
+                    .map(|entry| entry.summary.display_name)
+            })
+            .unwrap_or_else(|| skill.relative_path.clone());
+        let directory = skill.skill_directory().to_path_buf();
+        Ok(QuarantineCandidate {
+            id: skill.id,
+            provider_id: skill.provider_id,
+            relative_path: skill.relative_path,
+            display_name,
+            can_quarantine: provider.capabilities.can_quarantine,
+            directory,
+        })
+    }
+
+    pub(crate) fn provider_can_restore(&self, provider_id: &str) -> bool {
+        ProviderRegistry::with_roots(self.roots_for_scan())
+            .discover_all()
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider_id && provider.capabilities.can_restore)
     }
 
     pub(crate) fn managed_user_root(&self) -> PathBuf {

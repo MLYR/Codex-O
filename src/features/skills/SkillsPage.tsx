@@ -1,9 +1,10 @@
-import { AlertCircle, FileSearch, RefreshCw, ScanSearch, Search } from "lucide-react";
+import { AlertCircle, Archive, FileSearch, RefreshCw, ScanSearch, Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { settingsApi } from "../settings/api";
 import { skillCatalogApi } from "./api";
 import { formatBytes, formatUpdatedAt, scopeLabel } from "./format";
+import { QuarantinePanel } from "./QuarantinePanel";
 import type {
   CatalogScan,
   SkillListQuery,
@@ -26,6 +27,7 @@ export function SkillsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isScanning, setIsScanning] = useState(false);
   const [showInitialNotice, setShowInitialNotice] = useState(false);
+  const [showQuarantine, setShowQuarantine] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -94,6 +96,10 @@ export function SkillsPage() {
     await scan();
   };
 
+  if (showQuarantine) {
+    return <><button className="back-button" type="button" onClick={() => setShowQuarantine(false)}>返回 Skills</button><QuarantinePanel /></>;
+  }
+
   return (
     <section className="skills-page" aria-labelledby="skills-title">
       <header className="skills-page-header">
@@ -101,15 +107,18 @@ export function SkillsPage() {
           <h1 id="skills-title">我的 Skills</h1>
           <p>来自本地受控来源的只读清单</p>
         </div>
-        <button
-          className="icon-text-button"
-          type="button"
-          onClick={() => void scan()}
-          disabled={isScanning}
-        >
-          <RefreshCw size={16} aria-hidden="true" className={isScanning ? "is-spinning" : ""} />
-          {catalog ? "重新扫描" : "扫描 Skills"}
-        </button>
+        <div className="skills-header-actions">
+          <button className="icon-text-button" type="button" onClick={() => setShowQuarantine(true)}><Archive size={16} aria-hidden="true" />隔离区</button>
+          <button
+            className="icon-text-button"
+            type="button"
+            onClick={() => void scan()}
+            disabled={isScanning}
+          >
+            <RefreshCw size={16} aria-hidden="true" className={isScanning ? "is-spinning" : ""} />
+            {catalog ? "重新扫描" : "扫描 Skills"}
+          </button>
+        </div>
       </header>
 
       {catalog ? (
