@@ -1,14 +1,21 @@
 import {
   AlertCircle,
   BrainCircuit,
+  Bug,
+  ClipboardCopy,
   Database,
+  Download,
+  FileWarning,
   FolderPlus,
   HeartPulse,
   KeyRound,
+  ListFilter,
   LoaderCircle,
   PackageOpen,
   Puzzle,
   RefreshCw,
+  ScrollText,
+  Settings2,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -19,6 +26,14 @@ import {
   type AiConfigView,
   type AiProviderKind,
   type AiSecretAction,
+  type DeveloperSettingsView,
+  type DiagnosticDomain,
+  type DiagnosticErrorCode,
+  type DiagnosticLevel,
+  type DiagnosticPage,
+  type DiagnosticQuery,
+  type DiagnosticRecord,
+  type DiagnosticResult,
   type EnvironmentHealth,
   type ScanPreferences,
 } from "./api";
@@ -30,12 +45,19 @@ const providerDefaults: Record<AiProviderKind, string> = {
 };
 
 export function SettingsPage() {
+  const [activeView, setActiveView] = useState<"general" | "diagnostics">("general");
   const [preferences, setPreferences] = useState<ScanPreferences>();
   const [aiConfig, setAiConfig] = useState<AiConfigView>();
   const [draft, setDraft] = useState<AiConfigView>();
   const [secretAction, setSecretAction] = useState<AiSecretAction>("keep");
   const [roots, setRoots] = useState<AdditionalRootView[]>([]);
   const [health, setHealth] = useState<EnvironmentHealth>();
+  const [developerSettings, setDeveloperSettings] = useState<DeveloperSettingsView>();
+  const [diagnostics, setDiagnostics] = useState<DiagnosticPage>();
+  const [diagnosticQuery, setDiagnosticQuery] = useState<DiagnosticQuery>({ limit: 200 });
+  const [selectedEventId, setSelectedEventId] = useState<string>();
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [clearArmed, setClearArmed] = useState(false);
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
@@ -48,7 +70,8 @@ export function SettingsPage() {
       settingsApi.getAiConfig(),
       settingsApi.listAdditionalRoots(),
       settingsApi.getEnvironmentHealth(),
-    ]).then(([preferencesResult, aiResult, rootsResult, healthResult]) => {
+      settingsApi.getDeveloperSettings(),
+    ]).then(([preferencesResult, aiResult, rootsResult, healthResult, developerResult]) => {
       if (!active) {
         return;
       }
@@ -66,8 +89,11 @@ export function SettingsPage() {
       if (healthResult.status === "fulfilled") {
         setHealth(healthResult.value);
       }
+      if (developerResult.status === "fulfilled") {
+        setDeveloperSettings(developerResult.value);
+      }
       if (
-        [preferencesResult, aiResult, rootsResult, healthResult].some(
+        [preferencesResult, aiResult, rootsResult, healthResult, developerResult].some(
           (result) => result.status === "rejected",
         )
       ) {
@@ -79,14 +105,49 @@ export function SettingsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (activeView !== "diagnostics" || !developerSettings?.developer_mode_enabled) {
+      return;
+    }
+    let active = true;
+    setDiagnosticLoading(true);
+    setError(undefined);
+    void settingsApi
+      .listDiagnostics(diagnosticQuery)
+      .then((page) => {
+        if (!active) {
+          return;
+        }
+        setDiagnostics(page);
+        setSelectedEventId((current) =>
+          current && page.records.some((record) => record.id === current)
+            ? current
+            : page.records[0]?.id,
+        );
+      })
+      .catch((failure: unknown) => {
+        if (active) {
+          setError(formatOperationError(failure));
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setDiagnosticLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeView, developerSettings?.developer_mode_enabled, diagnosticQuery]);
+
   const runAction = async (action: string, operation: () => Promise<void>) => {
     setBusyAction(action);
     setError(undefined);
     setMessage(undefined);
     try {
       await operation();
-    } catch {
-      setError("操作未完成，原设置保持不变。");
+    } catch (failure) {
+      setError(formatOperationError(failure));
     } finally {
       setBusyAction(undefined);
     }
@@ -167,6 +228,51 @@ export function SettingsPage() {
     });
   };
 
+  const updateDeveloperMode = (enabled: boolean) => {
+    void runAction("developer-mode", async () => {
+      const saved = await settingsApi.setDeveloperMode(enabled);
+      setDeveloperSettings(saved);
+      if (!enabled) {
+        setActiveView("general");
+        setDiagnostics(undefined);
+        setSelectedEventId(undefined);
+      }
+      setMessage(enabled ? "开发者模式已开启。" : "开发者模式已关闭。");
+    });
+  };
+
+  const refreshDiagnostics = () => {
+    setDiagnosticQuery((current) => ({ ...current }));
+  };
+
+  const exportDiagnostics = () => {
+    void runAction("export-diagnostics", async () => {
+      const result = await settingsApi.exportDiagnostics(diagnosticQuery);
+      setMessage(`已导出 ${result.record_count} 条脱敏诊断记录。`);
+    });
+  };
+
+  const clearDiagnostics = () => {
+    if (!clearArmed) {
+      setClearArmed(true);
+      return;
+    }
+    void runAction("clear-diagnostics", async () => {
+      const result = await settingsApi.clearDiagnostics();
+      setClearArmed(false);
+      setDiagnostics({
+        records: [],
+        total: 0,
+        store_status: developerSettings?.store_status ?? "memory_only",
+        dropped_count: 0,
+      });
+      setSelectedEventId(undefined);
+      setMessage(
+        `已清空 ${result.memory_records_cleared} 条内存记录和 ${result.files_cleared} 个日志文件。`,
+      );
+    });
+  };
+
   return (
     <section className="settings-page" aria-labelledby="settings-title">
       <header className="settings-header">
@@ -175,6 +281,31 @@ export function SettingsPage() {
           <p>AI、Skill 来源与本机环境</p>
         </div>
       </header>
+
+      <div className="settings-subnav" role="tablist" aria-label="设置视图">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === "general"}
+          className={activeView === "general" ? "is-active" : ""}
+          onClick={() => setActiveView("general")}
+        >
+          <Settings2 size={15} aria-hidden="true" />
+          常规设置
+        </button>
+        {developerSettings?.developer_mode_enabled ? (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeView === "diagnostics"}
+            className={activeView === "diagnostics" ? "is-active" : ""}
+            onClick={() => setActiveView("diagnostics")}
+          >
+            <ScrollText size={15} aria-hidden="true" />
+            诊断与日志
+          </button>
+        ) : null}
+      </div>
 
       <div className="settings-feedback" aria-live="polite">
         {error ? (
@@ -189,6 +320,30 @@ export function SettingsPage() {
           </>
         ) : null}
       </div>
+
+      {activeView === "general" ? (
+        <>
+          <section className="settings-section" aria-labelledby="developer-mode-title">
+            <div className="settings-row settings-row-compact">
+              <span className="settings-icon" aria-hidden="true">
+                <Bug size={18} />
+              </span>
+              <div className="settings-copy">
+                <strong id="developer-mode-title">开发者模式</strong>
+                <span>开启后可查看、导出和清空始终脱敏的本机诊断记录</span>
+              </div>
+              {developerSettings ? (
+                <Toggle
+                  label="开发者模式"
+                  checked={developerSettings.developer_mode_enabled}
+                  disabled={busyAction === "developer-mode"}
+                  onChange={updateDeveloperMode}
+                />
+              ) : (
+                <LoaderCircle className="is-spinning" size={18} aria-label="正在读取开发者设置" />
+              )}
+            </div>
+          </section>
 
       <section className="settings-section" aria-labelledby="ai-settings-title">
         <div className="settings-section-heading">
@@ -468,7 +623,295 @@ export function SettingsPage() {
           </div>
         )}
       </section>
+        </>
+      ) : developerSettings?.developer_mode_enabled ? (
+        <DiagnosticsView
+          page={diagnostics}
+          query={diagnosticQuery}
+          selectedEventId={selectedEventId}
+          loading={diagnosticLoading}
+          busyAction={busyAction}
+          clearArmed={clearArmed}
+          onQueryChange={setDiagnosticQuery}
+          onSelect={setSelectedEventId}
+          onRefresh={refreshDiagnostics}
+          onExport={exportDiagnostics}
+          onClear={clearDiagnostics}
+          onCancelClear={() => setClearArmed(false)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function DiagnosticsView({
+  page,
+  query,
+  selectedEventId,
+  loading,
+  busyAction,
+  clearArmed,
+  onQueryChange,
+  onSelect,
+  onRefresh,
+  onExport,
+  onClear,
+  onCancelClear,
+}: {
+  page?: DiagnosticPage;
+  query: DiagnosticQuery;
+  selectedEventId?: string;
+  loading: boolean;
+  busyAction?: string;
+  clearArmed: boolean;
+  onQueryChange: (query: DiagnosticQuery) => void;
+  onSelect: (eventId: string) => void;
+  onRefresh: () => void;
+  onExport: () => void;
+  onClear: () => void;
+  onCancelClear: () => void;
+}) {
+  const selected = page?.records.find((record) => record.id === selectedEventId);
+
+  return (
+    <section className="settings-section diagnostics-section" aria-labelledby="diagnostics-title">
+      <div className="settings-section-heading diagnostics-heading">
+        <ScrollText size={18} aria-hidden="true" />
+        <div>
+          <h2 id="diagnostics-title">诊断与日志</h2>
+          <p>仅展示 Rust allowlist 生成的结构化安全字段</p>
+        </div>
+        <div className="diagnostics-actions">
+          <button
+            className="icon-only-button"
+            type="button"
+            aria-label="刷新诊断日志"
+            title="刷新诊断日志"
+            disabled={loading}
+            onClick={onRefresh}
+          >
+            <RefreshCw className={loading ? "is-spinning" : ""} size={16} aria-hidden="true" />
+          </button>
+          <button
+            className="secondary-button icon-button-label"
+            type="button"
+            disabled={busyAction === "export-diagnostics"}
+            onClick={onExport}
+          >
+            <Download size={15} aria-hidden="true" />
+            导出
+          </button>
+          <button
+            className={clearArmed ? "danger-button icon-button-label" : "secondary-button icon-button-label"}
+            type="button"
+            disabled={busyAction === "clear-diagnostics"}
+            onClick={onClear}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+            {clearArmed ? "确认清空" : "清空"}
+          </button>
+          {clearArmed ? (
+            <button className="secondary-button" type="button" onClick={onCancelClear}>
+              取消
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {page?.store_status === "memory_only" ? (
+        <div className="diagnostics-store-warning">
+          <FileWarning size={16} aria-hidden="true" />
+          <span>日志目录不可用，当前仅保留本进程最近 500 条内存诊断。</span>
+        </div>
+      ) : null}
+
+      <div className="diagnostics-filters" aria-label="诊断筛选">
+        <ListFilter size={16} aria-hidden="true" />
+        <label>
+          <span>级别</span>
+          <select
+            aria-label="诊断级别"
+            value={query.level ?? ""}
+            onChange={(event) =>
+              onQueryChange({
+                ...query,
+                level: (event.target.value || undefined) as DiagnosticLevel | undefined,
+              })
+            }
+          >
+            <option value="">全部</option>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+          </select>
+        </label>
+        <label>
+          <span>模块</span>
+          <select
+            aria-label="诊断模块"
+            value={query.domain ?? ""}
+            onChange={(event) =>
+              onQueryChange({
+                ...query,
+                domain: (event.target.value || undefined) as DiagnosticDomain | undefined,
+              })
+            }
+          >
+            <option value="">全部</option>
+            <option value="app">应用</option>
+            <option value="database">数据库</option>
+            <option value="catalog">Catalog</option>
+            <option value="skill_scan">Skill 扫描</option>
+            <option value="analysis">AI 分析</option>
+            <option value="settings">设置</option>
+            <option value="environment">环境健康</option>
+            <option value="diagnostics">诊断服务</option>
+          </select>
+        </label>
+        <label>
+          <span>结果</span>
+          <select
+            aria-label="诊断结果"
+            value={query.result ?? ""}
+            onChange={(event) =>
+              onQueryChange({
+                ...query,
+                result: (event.target.value || undefined) as DiagnosticResult | undefined,
+              })
+            }
+          >
+            <option value="">全部</option>
+            <option value="started">进行中</option>
+            <option value="succeeded">成功</option>
+            <option value="failed">失败</option>
+            <option value="degraded">降级</option>
+          </select>
+        </label>
+        <label>
+          <span>错误码</span>
+          <select
+            aria-label="诊断错误码"
+            value={query.errorCode ?? ""}
+            onChange={(event) =>
+              onQueryChange({
+                ...query,
+                errorCode: (event.target.value || undefined) as DiagnosticErrorCode | undefined,
+              })
+            }
+          >
+            <option value="">全部</option>
+            <option value="database_unavailable">database_unavailable</option>
+            <option value="database_schema_incompatible">
+              database_schema_incompatible
+            </option>
+            <option value="scan_failed">scan_failed</option>
+            <option value="scan_in_progress">scan_in_progress</option>
+            <option value="analysis_not_configured">analysis_not_configured</option>
+            <option value="analysis_failed">analysis_failed</option>
+            <option value="settings_unavailable">settings_unavailable</option>
+            <option value="invalid_configuration">invalid_configuration</option>
+            <option value="privacy_remote_blocked">privacy_remote_blocked</option>
+            <option value="ai_not_configured">ai_not_configured</option>
+            <option value="secret_unavailable">secret_unavailable</option>
+            <option value="path_not_allowed">path_not_allowed</option>
+          </select>
+        </label>
+      </div>
+
+      {loading && !page ? (
+        <div className="settings-loading">
+          <LoaderCircle className="is-spinning" size={18} />
+          正在读取脱敏诊断
+        </div>
+      ) : page?.records.length ? (
+        <div className="diagnostics-layout">
+          <div className="diagnostics-list-pane">
+            <div className="diagnostics-summary">
+              <span>{page.total} 条匹配记录</span>
+              {page.dropped_count > 0 ? <b>{page.dropped_count} 条待聚合写入</b> : null}
+            </div>
+            <ol className="diagnostics-list">
+              {page.records.map((record) => (
+                <li key={record.id}>
+                  <button
+                    type="button"
+                    className={record.id === selectedEventId ? "is-selected" : ""}
+                    aria-pressed={record.id === selectedEventId}
+                    onClick={() => onSelect(record.id)}
+                  >
+                    <span className="diagnostic-level" data-level={record.level}>
+                      {record.level}
+                    </span>
+                    <strong>{eventLabel(record.event_code)}</strong>
+                    <time>{formatDiagnosticTime(record.occurred_at)}</time>
+                    <code>{record.id}</code>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          </div>
+          {selected ? <DiagnosticDetail record={selected} /> : null}
+        </div>
+      ) : (
+        <div className="diagnostics-empty">
+          <ShieldCheck size={22} aria-hidden="true" />
+          <strong>没有匹配的诊断记录</strong>
+          <span>应用会继续采集经过脱敏的 Info、Warning 和 Error 事件。</span>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DiagnosticDetail({ record }: { record: DiagnosticRecord }) {
+  const copyRecord = () => {
+    const serialized = JSON.stringify(record, null, 2);
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(serialized);
+    }
+  };
+  return (
+    <aside className="diagnostics-detail" aria-label="诊断详情">
+      <div className="diagnostics-detail-heading">
+        <div>
+          <strong>{eventLabel(record.event_code)}</strong>
+          <code>{record.id}</code>
+        </div>
+        <button
+          className="icon-only-button"
+          type="button"
+          aria-label="复制诊断详情"
+          title="复制诊断详情"
+          onClick={copyRecord}
+        >
+          <ClipboardCopy size={15} aria-hidden="true" />
+        </button>
+      </div>
+      <dl>
+        <DiagnosticField label="时间" value={formatDiagnosticTime(record.occurred_at)} />
+        <DiagnosticField label="级别" value={record.level} />
+        <DiagnosticField label="模块" value={domainLabel(record.domain)} />
+        <DiagnosticField label="结果" value={resultLabel(record.result)} />
+        <DiagnosticField label="耗时" value={record.duration_ms === undefined ? "未记录" : `${record.duration_ms} ms`} />
+        <DiagnosticField label="错误码" value={record.error_code ?? "无"} />
+        <DiagnosticField label="可重试" value={record.retryable ? "是" : "否"} />
+        <DiagnosticField label="恢复建议" value={recoveryLabel(record.recovery_code)} />
+        <DiagnosticField label="Provider" value={record.provider_kind ?? "未关联"} />
+        <DiagnosticField label="项目数" value={record.item_count?.toString() ?? "未记录"} />
+        <DiagnosticField label="字节数" value={record.byte_count?.toString() ?? "未记录"} />
+        <DiagnosticField label="丢弃聚合" value={record.dropped_count?.toString() ?? "0"} />
+        <DiagnosticField label="实体引用" value={record.entity_ref ?? "未关联"} />
+      </dl>
+    </aside>
+  );
+}
+
+function DiagnosticField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
   );
 }
 
@@ -554,4 +997,94 @@ function healthStatusLabel(status: string) {
     unavailable: "不可用",
   };
   return labels[status] ?? status;
+}
+
+function eventLabel(eventCode: string) {
+  const labels: Record<string, string> = {
+    app_started: "应用启动",
+    database_initialized: "数据库初始化",
+    catalog_cache_loaded: "Catalog 缓存加载",
+    frontend_ready: "前端就绪",
+    skill_scan_started: "Skill 扫描开始",
+    skill_scan_completed: "Skill 扫描完成",
+    skill_scan_failed: "Skill 扫描失败",
+    analysis_queued: "AI 分析已排队",
+    analysis_retried: "AI 分析重试",
+    analysis_completed: "AI 分析完成",
+    analysis_failed: "AI 分析失败",
+    settings_loaded: "设置读取",
+    settings_saved: "设置保存",
+    ai_connection_tested: "AI 连接测试",
+    environment_health_checked: "环境健康检查",
+    diagnostic_queue_dropped: "诊断队列降级",
+    diagnostic_access_denied: "诊断访问被拒绝",
+    diagnostics_exported: "诊断导出",
+    diagnostics_cleared: "诊断清空",
+  };
+  return labels[eventCode] ?? eventCode;
+}
+
+function domainLabel(domain: string) {
+  const labels: Record<string, string> = {
+    app: "应用",
+    database: "数据库",
+    catalog: "Catalog",
+    skill_scan: "Skill 扫描",
+    analysis: "AI 分析",
+    settings: "设置",
+    environment: "环境健康",
+    diagnostics: "诊断服务",
+  };
+  return labels[domain] ?? domain;
+}
+
+function resultLabel(result: string) {
+  const labels: Record<string, string> = {
+    started: "进行中",
+    succeeded: "成功",
+    failed: "失败",
+    degraded: "降级",
+  };
+  return labels[result] ?? result;
+}
+
+function recoveryLabel(recoveryCode?: string) {
+  const labels: Record<string, string> = {
+    retry: "重试当前操作",
+    check_settings: "检查相关设置",
+    rescan: "重新扫描",
+    restart_application: "重启应用",
+    continue_with_memory_diagnostics: "继续使用内存诊断",
+  };
+  return recoveryCode ? (labels[recoveryCode] ?? recoveryCode) : "无";
+}
+
+function formatDiagnosticTime(occurredAt: number) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(new Date(occurredAt));
+}
+
+function formatOperationError(failure: unknown) {
+  if (failure && typeof failure === "object") {
+    const candidate = failure as Record<string, unknown>;
+    const code =
+      typeof candidate.code === "string" && /^[a-z0-9_]{1,64}$/.test(candidate.code)
+        ? candidate.code
+        : undefined;
+    const eventId =
+      typeof candidate.event_id === "string" &&
+      /^evt-[a-f0-9]{16}-[a-f0-9]{16}$/.test(candidate.event_id)
+        ? candidate.event_id
+        : undefined;
+    if (code) {
+      return eventId ? `操作未完成 · ${code} · ${eventId}` : `操作未完成 · ${code}`;
+    }
+  }
+  return "操作未完成，原设置保持不变。";
 }

@@ -12,7 +12,7 @@ pub mod settings;
 #[cfg(test)]
 mod m1_gate;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use tauri::Manager;
 
@@ -28,13 +28,31 @@ pub fn run() {
             let repository_directory =
                 std::env::current_dir().unwrap_or_else(|_| home_directory.clone());
             let app_local_data_directory = app.path().app_local_data_dir().ok();
+            // Diagnostics starts before database, Catalog, analysis, and settings so startup failures remain traceable.
+            let diagnostics = observability::DiagnosticService::new(
+                app.path().app_log_dir().ok(),
+                app_local_data_directory
+                    .as_deref()
+                    .map(observability::settings_path),
+            );
+            diagnostics.emit(observability::DiagnosticRecord::new(
+                observability::DiagnosticLevel::Info,
+                observability::DiagnosticDomain::App,
+                observability::DiagnosticEventCode::AppStarted,
+                observability::DiagnosticResult::Succeeded,
+            ));
             let database_path = app_local_data_directory
                 .as_ref()
                 .map(|directory| db::database_path(directory));
+            let database_started = Instant::now();
             let database = database_path
                 .as_ref()
                 .map(|path| db::initialize(path.clone()))
                 .unwrap_or_else(db::storage_unavailable);
+            diagnostics.emit(database_diagnostic_record(
+                database.status(),
+                database_started.elapsed().as_millis() as u64,
+            ));
             let roots = providers::ProviderRoots::new(
                 home_directory.clone(),
                 repository_directory,
@@ -68,30 +86,44 @@ pub fn run() {
                 Arc::clone(&analysis_service),
                 Arc::new(analysis::TauriAnalysisProgressSink::new(
                     app.handle().clone(),
+                    Arc::clone(&diagnostics),
                 )),
             );
             let settings_service = app_local_data_directory
                 .as_ref()
                 .map(|directory| {
-                    Arc::new(settings::SettingsService::new(
-                        settings::config_path(directory),
-                        settings::system_secret_store(),
-                        Arc::clone(&analysis_service),
-                        catalog.clone(),
-                        database.status(),
-                        Some(home_directory.join(".codex/state_5.sqlite")),
-                    ))
+                    Arc::new(
+                        settings::SettingsService::new(
+                            settings::config_path(directory),
+                            settings::system_secret_store(),
+                            Arc::clone(&analysis_service),
+                            catalog.clone(),
+                            database.status(),
+                            Some(home_directory.join(".codex/state_5.sqlite")),
+                        )
+                        .with_diagnostics(Arc::clone(&diagnostics)),
+                    )
                 })
                 .unwrap_or_else(|| {
                     // App-local path resolution failure keeps settings read-only instead of escaping to cwd.
-                    Arc::new(settings::SettingsService::without_storage(
-                        settings::system_secret_store(),
-                        Arc::clone(&analysis_service),
-                        catalog.clone(),
-                        database.status(),
-                        None,
-                    ))
+                    Arc::new(
+                        settings::SettingsService::without_storage(
+                            settings::system_secret_store(),
+                            Arc::clone(&analysis_service),
+                            catalog.clone(),
+                            database.status(),
+                            None,
+                        )
+                        .with_diagnostics(Arc::clone(&diagnostics)),
+                    )
                 });
+            diagnostics.emit(observability::DiagnosticRecord::new(
+                observability::DiagnosticLevel::Info,
+                observability::DiagnosticDomain::Settings,
+                observability::DiagnosticEventCode::SettingsLoaded,
+                observability::DiagnosticResult::Succeeded,
+            ));
+            app.manage(Arc::clone(&diagnostics));
             app.manage(analysis_queue);
             app.manage(analysis_service);
             app.manage(settings_service);
@@ -118,10 +150,54 @@ pub fn run() {
             settings::get_environment_health,
             settings::list_additional_roots,
             settings::select_additional_root,
-            settings::remove_additional_root
+            settings::remove_additional_root,
+            observability::get_developer_settings,
+            observability::set_developer_mode,
+            observability::list_diagnostics,
+            observability::export_diagnostics,
+            observability::clear_diagnostics
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn database_diagnostic_record(
+    status: db::DatabaseStatus,
+    duration_ms: u64,
+) -> observability::DiagnosticRecord {
+    match status {
+        db::DatabaseStatus::Ready { .. } => observability::DiagnosticRecord::new(
+            observability::DiagnosticLevel::Info,
+            observability::DiagnosticDomain::Database,
+            observability::DiagnosticEventCode::DatabaseInitialized,
+            observability::DiagnosticResult::Succeeded,
+        )
+        .with_duration(duration_ms),
+        db::DatabaseStatus::Diagnostic(diagnostic) => {
+            let error_code = match diagnostic.code {
+                db::DatabaseDiagnosticCode::UnsupportedSchemaVersion => {
+                    observability::DiagnosticErrorCode::DatabaseSchemaIncompatible
+                }
+                db::DatabaseDiagnosticCode::CorruptDatabase
+                | db::DatabaseDiagnosticCode::MigrationFailed
+                | db::DatabaseDiagnosticCode::StorageUnavailable => {
+                    observability::DiagnosticErrorCode::DatabaseUnavailable
+                }
+            };
+            observability::DiagnosticRecord::new(
+                observability::DiagnosticLevel::Error,
+                observability::DiagnosticDomain::Database,
+                observability::DiagnosticEventCode::DatabaseInitialized,
+                observability::DiagnosticResult::Degraded,
+            )
+            .with_duration(duration_ms)
+            .with_error(
+                error_code,
+                true,
+                observability::DiagnosticRecoveryCode::RestartApplication,
+            )
+        }
+    }
 }
 
 #[cfg(test)]

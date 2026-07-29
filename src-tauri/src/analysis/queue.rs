@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Semaphore;
 
+use crate::observability::{
+    DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel, DiagnosticRecord,
+    DiagnosticRecoveryCode, DiagnosticResult, DiagnosticService,
+};
+
 use super::{AnalysisResult, AnalysisRunStatus, AnalysisService, AnalysisServiceError};
 
 const DEFAULT_CONCURRENCY: usize = 2;
@@ -53,17 +58,48 @@ impl AnalysisProgressSink for NoopAnalysisProgressSink {
 #[derive(Clone)]
 pub struct TauriAnalysisProgressSink {
     app: AppHandle,
+    diagnostics: Arc<DiagnosticService>,
+    last_statuses: Arc<Mutex<HashMap<String, AnalysisJobStatus>>>,
 }
 
 impl TauriAnalysisProgressSink {
-    pub fn new(app: AppHandle) -> Self {
-        Self { app }
+    pub fn new(app: AppHandle, diagnostics: Arc<DiagnosticService>) -> Self {
+        Self {
+            app,
+            diagnostics,
+            last_statuses: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
 impl AnalysisProgressSink for TauriAnalysisProgressSink {
     fn emit(&self, progress: &AnalysisProgress) {
         let _ = self.app.emit(ANALYSIS_PROGRESS_EVENT, progress);
+        let changed = {
+            let mut last_statuses = self
+                .last_statuses
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let changed = progress
+                .jobs
+                .iter()
+                .filter(|job| {
+                    last_statuses
+                        .get(&job.job_id)
+                        .is_none_or(|status| *status != job.status)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for job in &changed {
+                last_statuses.insert(job.job_id.clone(), job.status);
+            }
+            changed
+        };
+        for job in changed {
+            if let Some(record) = analysis_job_record(&job) {
+                self.diagnostics.emit(record);
+            }
+        }
     }
 }
 
@@ -262,6 +298,53 @@ fn job_status(status: AnalysisRunStatus) -> AnalysisJobStatus {
         AnalysisRunStatus::Failed => AnalysisJobStatus::Failed,
         AnalysisRunStatus::Degraded => AnalysisJobStatus::Degraded,
     }
+}
+
+fn analysis_job_record(job: &AnalysisJobView) -> Option<DiagnosticRecord> {
+    let record = match job.status {
+        AnalysisJobStatus::Queued => DiagnosticRecord::new(
+            DiagnosticLevel::Info,
+            DiagnosticDomain::Analysis,
+            DiagnosticEventCode::AnalysisQueued,
+            DiagnosticResult::Started,
+        ),
+        AnalysisJobStatus::Ready | AnalysisJobStatus::Stale => DiagnosticRecord::new(
+            DiagnosticLevel::Info,
+            DiagnosticDomain::Analysis,
+            DiagnosticEventCode::AnalysisCompleted,
+            DiagnosticResult::Succeeded,
+        ),
+        AnalysisJobStatus::Degraded => DiagnosticRecord::new(
+            DiagnosticLevel::Warning,
+            DiagnosticDomain::Analysis,
+            DiagnosticEventCode::AnalysisCompleted,
+            DiagnosticResult::Degraded,
+        ),
+        AnalysisJobStatus::Failed => DiagnosticRecord::new(
+            DiagnosticLevel::Error,
+            DiagnosticDomain::Analysis,
+            DiagnosticEventCode::AnalysisFailed,
+            DiagnosticResult::Failed,
+        )
+        .with_error(
+            DiagnosticErrorCode::AnalysisFailed,
+            true,
+            DiagnosticRecoveryCode::Retry,
+        ),
+        AnalysisJobStatus::NotConfigured => DiagnosticRecord::new(
+            DiagnosticLevel::Warning,
+            DiagnosticDomain::Analysis,
+            DiagnosticEventCode::AnalysisFailed,
+            DiagnosticResult::Failed,
+        )
+        .with_error(
+            DiagnosticErrorCode::AnalysisNotConfigured,
+            false,
+            DiagnosticRecoveryCode::CheckSettings,
+        ),
+        AnalysisJobStatus::Running => return None,
+    };
+    Some(record.with_entity_ref(&job.skill_id))
 }
 
 fn progress_from_jobs(mut jobs: Vec<AnalysisJobView>) -> AnalysisProgress {

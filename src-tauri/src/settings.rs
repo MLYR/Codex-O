@@ -27,6 +27,11 @@ use crate::{
     catalog::SkillCatalog,
     codex_fixture,
     db::{DatabaseDiagnosticCode, DatabaseStatus},
+    observability::{
+        DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel,
+        DiagnosticProviderKind, DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult,
+        DiagnosticService,
+    },
     providers::AdditionalRoot,
     secrets::{
         ProviderSecretId, SecretStore, SecretStoreErrorCode, SecretValue, SystemSecretStore,
@@ -171,6 +176,7 @@ pub struct SettingsService {
     database_status: DatabaseStatus,
     codex_database_path: Option<PathBuf>,
     credential_counter: AtomicU64,
+    diagnostics: Option<Arc<DiagnosticService>>,
 }
 
 impl SettingsService {
@@ -198,6 +204,7 @@ impl SettingsService {
             database_status,
             codex_database_path,
             credential_counter: AtomicU64::new(0),
+            diagnostics: None,
         };
         service.revalidate_loaded_additional_roots();
         service.refresh_analysis_provider();
@@ -222,9 +229,16 @@ impl SettingsService {
             database_status,
             codex_database_path,
             credential_counter: AtomicU64::new(0),
+            diagnostics: None,
         };
         service.refresh_analysis_provider();
         service
+    }
+
+    pub fn with_diagnostics(mut self, diagnostics: Arc<DiagnosticService>) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self.refresh_analysis_provider();
+        self
     }
 
     pub fn get_ai_config(&self) -> AiConfigView {
@@ -478,6 +492,10 @@ impl SettingsService {
         );
         provider_config.timeout = Duration::from_secs(config.timeout_seconds);
         HttpAiProvider::new(provider_config, Arc::clone(&self.secrets))
+            .map(|provider| match &self.diagnostics {
+                Some(diagnostics) => provider.with_diagnostics(Arc::clone(diagnostics)),
+                None => provider,
+            })
             .map(|provider| Arc::new(provider) as Arc<dyn AiProvider>)
             .map_err(|_| invalid_configuration())
     }
@@ -669,28 +687,140 @@ impl SettingsService {
 }
 
 #[tauri::command]
-pub fn get_ai_config(settings: State<'_, Arc<SettingsService>>) -> AiConfigView {
-    settings.get_ai_config()
+pub fn get_ai_config(
+    settings: State<'_, Arc<SettingsService>>,
+    diagnostics: State<'_, Arc<DiagnosticService>>,
+) -> AiConfigView {
+    let started = Instant::now();
+    let view = settings.get_ai_config();
+    diagnostics.emit(
+        DiagnosticRecord::new(
+            DiagnosticLevel::Info,
+            DiagnosticDomain::Settings,
+            DiagnosticEventCode::SettingsLoaded,
+            DiagnosticResult::Succeeded,
+        )
+        .with_duration(started.elapsed().as_millis() as u64)
+        .with_provider(diagnostic_provider_kind(view.kind)),
+    );
+    view
 }
 
 #[tauri::command]
 pub fn save_ai_config(
     settings: State<'_, Arc<SettingsService>>,
+    diagnostics: State<'_, Arc<DiagnosticService>>,
     input: AiConfigInput,
 ) -> Result<AiConfigView, SettingsError> {
-    settings.save_ai_config(input)
+    let started = Instant::now();
+    let result = settings.save_ai_config(input);
+    match &result {
+        Ok(view) => {
+            diagnostics.emit(
+                DiagnosticRecord::new(
+                    DiagnosticLevel::Info,
+                    DiagnosticDomain::Settings,
+                    DiagnosticEventCode::SettingsSaved,
+                    DiagnosticResult::Succeeded,
+                )
+                .with_duration(started.elapsed().as_millis() as u64)
+                .with_provider(diagnostic_provider_kind(view.kind)),
+            );
+        }
+        Err(error) => {
+            diagnostics.emit(
+                DiagnosticRecord::new(
+                    DiagnosticLevel::Error,
+                    DiagnosticDomain::Settings,
+                    DiagnosticEventCode::SettingsSaved,
+                    DiagnosticResult::Failed,
+                )
+                .with_duration(started.elapsed().as_millis() as u64)
+                .with_error(
+                    settings_diagnostic_error(error.code),
+                    true,
+                    DiagnosticRecoveryCode::CheckSettings,
+                ),
+            );
+        }
+    }
+    result
 }
 
 #[tauri::command]
 pub async fn test_ai_connection(
     settings: State<'_, Arc<SettingsService>>,
+    diagnostics: State<'_, Arc<DiagnosticService>>,
 ) -> Result<ConnectionTestResult, SettingsError> {
-    settings.test_ai_connection().await
+    let started = Instant::now();
+    let result = settings.test_ai_connection().await;
+    match &result {
+        Ok(connection) => {
+            let (level, diagnostic_result) = match connection.status {
+                ConnectionStatus::Ready => (DiagnosticLevel::Info, DiagnosticResult::Succeeded),
+                ConnectionStatus::Failed => (DiagnosticLevel::Error, DiagnosticResult::Failed),
+                ConnectionStatus::Blocked => (DiagnosticLevel::Warning, DiagnosticResult::Degraded),
+            };
+            diagnostics.emit(
+                DiagnosticRecord::new(
+                    level,
+                    DiagnosticDomain::Settings,
+                    DiagnosticEventCode::AiConnectionTested,
+                    diagnostic_result,
+                )
+                .with_duration(started.elapsed().as_millis() as u64),
+            );
+        }
+        Err(error) => {
+            diagnostics.emit(
+                DiagnosticRecord::new(
+                    DiagnosticLevel::Error,
+                    DiagnosticDomain::Settings,
+                    DiagnosticEventCode::AiConnectionTested,
+                    DiagnosticResult::Failed,
+                )
+                .with_duration(started.elapsed().as_millis() as u64)
+                .with_error(
+                    settings_diagnostic_error(error.code),
+                    true,
+                    DiagnosticRecoveryCode::CheckSettings,
+                ),
+            );
+        }
+    }
+    result
 }
 
 #[tauri::command]
-pub fn get_environment_health(settings: State<'_, Arc<SettingsService>>) -> EnvironmentHealth {
-    settings.get_environment_health()
+pub fn get_environment_health(
+    settings: State<'_, Arc<SettingsService>>,
+    diagnostics: State<'_, Arc<DiagnosticService>>,
+) -> EnvironmentHealth {
+    let started = Instant::now();
+    let health = settings.get_environment_health();
+    let degraded = health
+        .items
+        .iter()
+        .any(|item| item.status != HealthStatus::Ready);
+    diagnostics.emit(
+        DiagnosticRecord::new(
+            if degraded {
+                DiagnosticLevel::Warning
+            } else {
+                DiagnosticLevel::Info
+            },
+            DiagnosticDomain::Environment,
+            DiagnosticEventCode::EnvironmentHealthChecked,
+            if degraded {
+                DiagnosticResult::Degraded
+            } else {
+                DiagnosticResult::Succeeded
+            },
+        )
+        .with_duration(started.elapsed().as_millis() as u64)
+        .with_counts(Some(health.items.len() as u64), None),
+    );
+    health
 }
 
 #[tauri::command]
@@ -726,6 +856,31 @@ pub fn config_path(app_local_data_directory: &Path) -> PathBuf {
 
 pub fn system_secret_store() -> Arc<dyn SecretStore + Send + Sync> {
     Arc::new(SystemSecretStore::new())
+}
+
+const fn diagnostic_provider_kind(kind: AiProviderKind) -> DiagnosticProviderKind {
+    match kind {
+        AiProviderKind::OpenAiCompatible => DiagnosticProviderKind::OpenAiCompatible,
+        AiProviderKind::Anthropic => DiagnosticProviderKind::Anthropic,
+        AiProviderKind::Ollama => DiagnosticProviderKind::Ollama,
+    }
+}
+
+const fn settings_diagnostic_error(code: SettingsErrorCode) -> DiagnosticErrorCode {
+    match code {
+        SettingsErrorCode::InvalidConfiguration => DiagnosticErrorCode::InvalidConfiguration,
+        SettingsErrorCode::SecretRequired | SettingsErrorCode::SecretUnavailable => {
+            DiagnosticErrorCode::SecretUnavailable
+        }
+        SettingsErrorCode::StorageUnavailable | SettingsErrorCode::SelectionUnavailable => {
+            DiagnosticErrorCode::SettingsUnavailable
+        }
+        SettingsErrorCode::PrivacyRemoteBlocked => DiagnosticErrorCode::PrivacyRemoteBlocked,
+        SettingsErrorCode::AiNotConfigured => DiagnosticErrorCode::AiNotConfigured,
+        SettingsErrorCode::PathNotAllowed
+        | SettingsErrorCode::PathSymlinkDenied
+        | SettingsErrorCode::RootDuplicate => DiagnosticErrorCode::PathNotAllowed,
+    }
 }
 
 fn default_ai_config_view() -> AiConfigView {

@@ -10,7 +10,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use crate::secrets::{ProviderSecretId, SecretStore, SecretStoreErrorCode};
+use crate::{
+    observability::{
+        DiagnosticDomain, DiagnosticEventCode, DiagnosticLevel, DiagnosticProviderKind,
+        DiagnosticRecord, DiagnosticResult, DiagnosticService,
+    },
+    secrets::{ProviderSecretId, SecretStore, SecretStoreErrorCode},
+};
 
 use super::{skill_passport_schema, AnalysisContext, RedactionCounts, MAX_PROVIDER_RESPONSE_BYTES};
 
@@ -140,6 +146,7 @@ pub struct HttpAiProvider {
     client: Client,
     secrets: Arc<dyn SecretStore + Send + Sync>,
     retry_delay: Duration,
+    diagnostics: Option<Arc<DiagnosticService>>,
 }
 
 impl HttpAiProvider {
@@ -159,7 +166,13 @@ impl HttpAiProvider {
             client,
             secrets,
             retry_delay: DEFAULT_RETRY_DELAY,
+            diagnostics: None,
         })
+    }
+
+    pub fn with_diagnostics(mut self, diagnostics: Arc<DiagnosticService>) -> Self {
+        self.diagnostics = Some(diagnostics);
+        self
     }
 
     #[cfg(test)]
@@ -285,6 +298,18 @@ impl AiProvider for HttpAiProvider {
                     });
                 }
                 Err(error) if error.retryable && attempt < MAX_RETRIES => {
+                    if let Some(diagnostics) = &self.diagnostics {
+                        diagnostics.emit(
+                            DiagnosticRecord::new(
+                                DiagnosticLevel::Warning,
+                                DiagnosticDomain::Analysis,
+                                DiagnosticEventCode::AnalysisRetried,
+                                DiagnosticResult::Degraded,
+                            )
+                            .with_provider(diagnostic_provider_kind(self.config.kind))
+                            .with_counts(Some((attempt + 1) as u64), None),
+                        );
+                    }
                     sleep(self.retry_delay).await;
                 }
                 Err(error) => return Err(error),
@@ -294,6 +319,14 @@ impl AiProvider for HttpAiProvider {
             code: AnalysisProviderErrorCode::TransportUnavailable,
             retryable: true,
         })
+    }
+}
+
+const fn diagnostic_provider_kind(kind: AiProviderKind) -> DiagnosticProviderKind {
+    match kind {
+        AiProviderKind::OpenAiCompatible => DiagnosticProviderKind::OpenAiCompatible,
+        AiProviderKind::Anthropic => DiagnosticProviderKind::Anthropic,
+        AiProviderKind::Ollama => DiagnosticProviderKind::Ollama,
     }
 }
 

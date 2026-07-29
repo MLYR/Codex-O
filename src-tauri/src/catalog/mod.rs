@@ -11,13 +11,17 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
     },
-    time::UNIX_EPOCH,
+    time::{Instant, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::{
+    observability::{
+        DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel,
+        DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult, DiagnosticService,
+    },
     parsing::{
         parse_skill, read_skill_source, ArtifactSnapshot, MarkdownHeading, ParseDiagnostic,
         ParseDiagnosticCode, ResourceEntry, PARSER_VERSION,
@@ -692,8 +696,34 @@ pub fn list_providers(catalog: State<'_, SkillCatalog>) -> ProviderList {
 }
 
 #[tauri::command]
-pub async fn scan_skills(catalog: State<'_, SkillCatalog>) -> Result<CatalogScan, CatalogError> {
-    catalog.begin_scan()?;
+pub async fn scan_skills(
+    catalog: State<'_, SkillCatalog>,
+    diagnostics: State<'_, Arc<DiagnosticService>>,
+) -> Result<CatalogScan, CatalogError> {
+    let started = Instant::now();
+    diagnostics.emit(DiagnosticRecord::new(
+        DiagnosticLevel::Info,
+        DiagnosticDomain::SkillScan,
+        DiagnosticEventCode::SkillScanStarted,
+        DiagnosticResult::Started,
+    ));
+    if let Err(error) = catalog.begin_scan() {
+        diagnostics.emit(
+            DiagnosticRecord::new(
+                DiagnosticLevel::Warning,
+                DiagnosticDomain::SkillScan,
+                DiagnosticEventCode::SkillScanFailed,
+                DiagnosticResult::Failed,
+            )
+            .with_duration(started.elapsed().as_millis() as u64)
+            .with_error(
+                DiagnosticErrorCode::ScanInProgress,
+                true,
+                DiagnosticRecoveryCode::Retry,
+            ),
+        );
+        return Err(error);
+    }
     let scan_catalog = catalog.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || scan_catalog.scan_skills())
         .await
@@ -702,12 +732,68 @@ pub async fn scan_skills(catalog: State<'_, SkillCatalog>) -> Result<CatalogScan
             message: "The Skill scan did not complete.",
         });
     catalog.finish_scan();
+    match &result {
+        Ok(scan) => {
+            diagnostics.emit(
+                DiagnosticRecord::new(
+                    DiagnosticLevel::Info,
+                    DiagnosticDomain::SkillScan,
+                    DiagnosticEventCode::SkillScanCompleted,
+                    DiagnosticResult::Succeeded,
+                )
+                .with_duration(started.elapsed().as_millis() as u64)
+                .with_counts(Some(scan.skills.len() as u64), None),
+            );
+        }
+        Err(_) => {
+            diagnostics.emit(
+                DiagnosticRecord::new(
+                    DiagnosticLevel::Error,
+                    DiagnosticDomain::SkillScan,
+                    DiagnosticEventCode::SkillScanFailed,
+                    DiagnosticResult::Failed,
+                )
+                .with_duration(started.elapsed().as_millis() as u64)
+                .with_error(
+                    DiagnosticErrorCode::ScanFailed,
+                    true,
+                    DiagnosticRecoveryCode::Rescan,
+                ),
+            );
+        }
+    }
     result
 }
 
 #[tauri::command]
-pub fn load_catalog(catalog: State<'_, SkillCatalog>) -> Option<CatalogScan> {
-    catalog.load_catalog()
+pub fn load_catalog(
+    catalog: State<'_, SkillCatalog>,
+    diagnostics: State<'_, Arc<DiagnosticService>>,
+) -> Option<CatalogScan> {
+    let started = Instant::now();
+    let scan = catalog.load_catalog();
+    diagnostics.emit(
+        DiagnosticRecord::new(
+            if scan.is_some() {
+                DiagnosticLevel::Info
+            } else {
+                DiagnosticLevel::Warning
+            },
+            DiagnosticDomain::Catalog,
+            DiagnosticEventCode::CatalogCacheLoaded,
+            if scan.is_some() {
+                DiagnosticResult::Succeeded
+            } else {
+                DiagnosticResult::Degraded
+            },
+        )
+        .with_duration(started.elapsed().as_millis() as u64)
+        .with_counts(
+            scan.as_ref().map(|catalog| catalog.skills.len() as u64),
+            None,
+        ),
+    );
+    scan
 }
 
 #[tauri::command]
