@@ -11,6 +11,8 @@ use super::{
 
 const REQUIRED_TABLES: &[&str] = &[
     "artifact_snapshots",
+    "install_receipts",
+    "management_operations",
     "providers",
     "skill_analyses",
     "skills",
@@ -102,6 +104,33 @@ fn v1_schema_matches_design_columns() {
             "created_at",
         ]
     );
+    assert_eq!(
+        fixture.table_columns("install_receipts"),
+        vec![
+            "skill_id",
+            "source_type",
+            "source_url",
+            "repo_ref",
+            "commit_sha",
+            "subdirectory",
+            "installed_hash",
+            "installed_at",
+            "managed_by",
+        ]
+    );
+    assert_eq!(
+        fixture.table_columns("management_operations"),
+        vec![
+            "id",
+            "skill_id",
+            "operation",
+            "status",
+            "plan_json",
+            "result_json",
+            "created_at",
+            "completed_at",
+        ]
+    );
 }
 
 #[test]
@@ -174,7 +203,7 @@ fn existing_v0_database_is_backed_up_before_migration() {
 }
 
 #[test]
-fn v2_database_is_backed_up_and_preserves_legacy_tables_during_v3_upgrade() {
+fn v2_database_is_backed_up_and_preserves_legacy_tables_during_v4_upgrade() {
     let fixture = DatabaseFixture::new();
     fixture.create_v2_database();
     let original_bytes = fs::read(&fixture.database_path).unwrap();
@@ -200,8 +229,59 @@ fn v2_database_is_backed_up_and_preserves_legacy_tables_during_v3_upgrade() {
         .iter()
         .all(|table| REQUIRED_TABLES.contains(&table.as_str())
             || table == "ai_config"
-            || table == "skill_ai_summaries"));
+            || table == "skill_ai_summaries"
+            || table == "install_receipts"
+            || table == "management_operations"));
     assert!(fixture.table_names().iter().any(|table| table == "skills"));
+}
+
+#[test]
+fn v3_database_is_backed_up_and_receipt_tables_are_added_during_v4_upgrade() {
+    let fixture = DatabaseFixture::new();
+    fixture.create_v3_database();
+    let original_bytes = fs::read(&fixture.database_path).unwrap();
+
+    let database = initialize(fixture.database_path.clone());
+
+    assert_eq!(
+        database.status(),
+        DatabaseStatus::Ready {
+            schema_version: CURRENT_SCHEMA_VERSION
+        }
+    );
+    assert_eq!(fixture.user_version(), CURRENT_SCHEMA_VERSION);
+    assert_eq!(fixture.backup_paths().len(), 1);
+    assert_eq!(
+        fs::read(&fixture.backup_paths()[0]).unwrap(),
+        original_bytes
+    );
+    assert_eq!(
+        fixture.table_columns("install_receipts"),
+        vec![
+            "skill_id",
+            "source_type",
+            "source_url",
+            "repo_ref",
+            "commit_sha",
+            "subdirectory",
+            "installed_hash",
+            "installed_at",
+            "managed_by",
+        ]
+    );
+    assert_eq!(
+        fixture.table_columns("management_operations"),
+        vec![
+            "id",
+            "skill_id",
+            "operation",
+            "status",
+            "plan_json",
+            "result_json",
+            "created_at",
+            "completed_at",
+        ]
+    );
 }
 
 #[test]
@@ -356,6 +436,14 @@ impl DatabaseFixture {
             )
             .unwrap();
         connection.pragma_update(None, "user_version", 2).unwrap();
+    }
+
+    fn create_v3_database(&self) {
+        let connection = self.open();
+        connection.execute_batch(include_str!("v1.sql")).unwrap();
+        connection.execute_batch(include_str!("v2.sql")).unwrap();
+        connection.execute_batch(include_str!("v3.sql")).unwrap();
+        connection.pragma_update(None, "user_version", 3).unwrap();
     }
 
     fn legacy_value(&self) -> String {

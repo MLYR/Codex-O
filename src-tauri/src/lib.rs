@@ -4,6 +4,7 @@ pub mod catalog;
 pub mod codex_fixture;
 pub mod db;
 pub mod observability;
+pub mod operations;
 pub mod parsing;
 pub mod providers;
 pub mod secrets;
@@ -70,13 +71,13 @@ pub fn run() {
                 }
                 None => catalog,
             };
-            let analysis_cache: Arc<dyn analysis::AnalysisCache> = match (&database, database_path)
-            {
-                (db::AppDatabase::Ready(_), Some(path)) => {
-                    Arc::new(analysis::SqliteAnalysisCache::new(path))
-                }
-                _ => Arc::new(analysis::UnavailableAnalysisCache),
-            };
+            let analysis_cache: Arc<dyn analysis::AnalysisCache> =
+                match (&database, database_path.clone()) {
+                    (db::AppDatabase::Ready(_), Some(path)) => {
+                        Arc::new(analysis::SqliteAnalysisCache::new(path))
+                    }
+                    _ => Arc::new(analysis::UnavailableAnalysisCache),
+                };
             let analysis_service = Arc::new(analysis::AnalysisService::new(
                 catalog.clone(),
                 analysis_cache,
@@ -124,6 +125,11 @@ pub fn run() {
                 observability::DiagnosticResult::Succeeded,
             ));
             app.manage(Arc::clone(&diagnostics));
+            app.manage(Arc::new(operations::OperationsService::new(
+                database_path.clone(),
+                catalog.clone(),
+                Arc::clone(&diagnostics),
+            )));
             app.manage(analysis_queue);
             app.manage(analysis_service);
             app.manage(settings_service);
@@ -155,7 +161,10 @@ pub fn run() {
             observability::set_developer_mode,
             observability::list_diagnostics,
             observability::export_diagnostics,
-            observability::clear_diagnostics
+            observability::clear_diagnostics,
+            operations::select_import_source,
+            operations::plan_skill_import,
+            operations::execute_skill_import
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

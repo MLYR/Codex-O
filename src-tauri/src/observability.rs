@@ -49,6 +49,7 @@ pub enum DiagnosticDomain {
     Settings,
     Environment,
     Diagnostics,
+    Operations,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -73,6 +74,9 @@ pub enum DiagnosticEventCode {
     DiagnosticAccessDenied,
     DiagnosticsExported,
     DiagnosticsCleared,
+    OperationPlanned,
+    OperationExecuted,
+    OperationFailed,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -113,6 +117,10 @@ pub enum DiagnosticErrorCode {
     AiNotConfigured,
     SecretUnavailable,
     PathNotAllowed,
+    OperationTokenInvalid,
+    OperationConflict,
+    OperationSourceChanged,
+    OperationExecutionFailed,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]

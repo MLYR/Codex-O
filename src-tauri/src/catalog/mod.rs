@@ -50,6 +50,13 @@ pub struct SkillCatalog {
     scan_in_progress: Arc<AtomicBool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImportStagedSkill {
+    pub content_hash: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
 impl SkillCatalog {
     pub fn new(roots: ProviderRoots) -> Self {
         let preferences = ScanPreferences {
@@ -288,6 +295,54 @@ impl SkillCatalog {
             .snapshot
             .map(|snapshot| snapshot.content_hash)
             .ok_or_else(CatalogError::analysis_unavailable)
+    }
+
+    pub(crate) fn managed_user_root(&self) -> PathBuf {
+        // Write targets are derived inside Rust from the managed provider root.
+        self.roots_snapshot().home_directory.join(".agents/skills")
+    }
+
+    pub(crate) fn validate_import_staging(
+        &self,
+        staging_home: PathBuf,
+        expected_relative_path: &str,
+    ) -> Result<ImportStagedSkill, CatalogError> {
+        // Reuse provider discovery and deterministic parsing against an isolated staging home.
+        let roots = ProviderRoots::new(staging_home, PathBuf::new(), PathBuf::new())
+            .with_plugin_cache_enabled(false)
+            .with_bundled_cache_enabled(false);
+        let discovered = ProviderRegistry::with_roots(roots).discover_all();
+        let Some(skill) = discovered.skills.into_iter().find(|skill| {
+            skill.provider_id == "user_global" && skill.relative_path == expected_relative_path
+        }) else {
+            return Err(CatalogError::import_source_invalid());
+        };
+        let parsed = parse_skill(&skill);
+        let Some(snapshot) = parsed.snapshot else {
+            return Err(CatalogError::import_source_invalid());
+        };
+
+        if !parsed.diagnostics.is_empty() || !snapshot.diagnostics.is_empty() {
+            return Err(CatalogError::import_source_invalid());
+        }
+
+        Ok(ImportStagedSkill {
+            content_hash: snapshot.content_hash,
+            name: snapshot.frontmatter.name,
+            description: snapshot.frontmatter.description,
+        })
+    }
+
+    pub(crate) fn managed_skill_id(&self, relative_path: &str) -> Option<String> {
+        self.cached_snapshot_from_memory_or_index()?
+            .entries
+            .into_iter()
+            .find_map(|entry| {
+                entry.skill.and_then(|skill| {
+                    (skill.provider_id == "user_global" && skill.relative_path == relative_path)
+                        .then_some(skill.id)
+                })
+            })
     }
 
     fn cached_scan(&self) -> CatalogScan {
@@ -686,6 +741,13 @@ impl CatalogError {
         Self {
             code: "analysis_source_unavailable",
             message: "The requested Skill cannot be prepared for analysis.",
+        }
+    }
+
+    fn import_source_invalid() -> Self {
+        Self {
+            code: "import_source_invalid",
+            message: "The selected Skill cannot be imported safely.",
         }
     }
 }

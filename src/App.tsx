@@ -4,6 +4,7 @@ import { routeManifest, type AppRoute } from "./app/RouteManifest";
 import { AppShell } from "./components/AppShell";
 import { PageState } from "./components/PageState";
 import { SettingsPage } from "./features/settings/SettingsPage";
+import { InstallPage } from "./features/install/InstallPage";
 import { SkillDetailPage } from "./features/skills/SkillDetailPage";
 import { SkillsPage } from "./features/skills/SkillsPage";
 import "./App.css";
@@ -19,9 +20,10 @@ function RoutePage({ route, children }: { route: AppRoute; children?: ReactNode 
 function App() {
   const skillsRoute = routeManifest.find((route) => route.id === "Skills");
   const skillDetailRoute = routeManifest.find((route) => route.id === "SkillDetail");
+  const installRoute = routeManifest.find((route) => route.id === "Install");
   const settingsRoute = routeManifest.find((route) => route.id === "Settings");
 
-  if (!skillsRoute || !skillDetailRoute || !settingsRoute) {
+  if (!skillsRoute || !skillDetailRoute || !installRoute || !settingsRoute) {
     return null;
   }
 
@@ -37,10 +39,17 @@ function App() {
         path="/settings"
         element={<RoutePage route={settingsRoute}><SettingsPage /></RoutePage>}
       />
+      <Route
+        path="/install"
+        element={<RoutePage route={installRoute}><InstallPage /></RoutePage>}
+      />
       {routeManifest
         .filter(
           (route) =>
-            route.id !== "Skills" && route.id !== "SkillDetail" && route.id !== "Settings",
+            route.id !== "Skills" &&
+            route.id !== "SkillDetail" &&
+            route.id !== "Install" &&
+            route.id !== "Settings",
         )
         .map((route) => (
         <Route key={route.id} path={route.path} element={<RoutePage route={route} />} />

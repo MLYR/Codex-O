@@ -1,6 +1,6 @@
 use rusqlite::{Connection, TransactionBehavior};
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Migration {
@@ -20,6 +20,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 3,
         sql: include_str!("v3.sql"),
+    },
+    Migration {
+        version: 4,
+        sql: include_str!("v4.sql"),
     },
 ];
 

@@ -1,0 +1,531 @@
+use std::{fs, path::PathBuf};
+
+use rusqlite::Connection;
+use tempfile::TempDir;
+
+use crate::{
+    catalog::SkillCatalog, db, observability::DiagnosticService, providers::ProviderRoots,
+};
+
+use super::{
+    inspect_source, valid_relative_path, ImportSourceKind, OperationPlanStatus,
+    OperationResultStatus, OperationsService, MAX_IMPORT_FILES, MAX_IMPORT_RESOURCE_BYTES,
+};
+
+struct Fixture {
+    temporary: TempDir,
+    home: PathBuf,
+    database_path: PathBuf,
+    service: OperationsService,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let temporary = tempfile::tempdir().expect("temporary import fixture");
+        let home = temporary.path().join("home");
+        let database_path = temporary.path().join("data.db");
+        assert!(matches!(
+            db::initialize(database_path.clone()),
+            db::AppDatabase::Ready(_)
+        ));
+        let roots = ProviderRoots::new(
+            home.clone(),
+            temporary.path().join("repository"),
+            temporary.path().join("plugin-cache"),
+        );
+        let catalog = SkillCatalog::with_index_path(roots, database_path.clone());
+        let service = OperationsService::new(
+            Some(database_path.clone()),
+            catalog,
+            DiagnosticService::new(None, None),
+        );
+        Self {
+            temporary,
+            home,
+            database_path,
+            service,
+        }
+    }
+
+    fn source_root(&self, name: &str) -> PathBuf {
+        self.temporary.path().join("sources").join(name)
+    }
+
+    fn write_valid_skill(&self, name: &str) -> PathBuf {
+        let root = self.source_root(name);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("SKILL.md"), valid_markdown(name)).unwrap();
+        root
+    }
+
+    fn target(&self, name: &str) -> PathBuf {
+        self.home.join(".agents/skills").join(name)
+    }
+
+    fn plan_directory(&self, source: PathBuf) -> super::PlannedImport {
+        let selection = self
+            .service
+            .select_source(ImportSourceKind::Directory, source)
+            .unwrap();
+        self.service.plan_import(&selection.token).unwrap()
+    }
+
+    fn execute_plan(&self, plan: &super::PlannedImport) -> super::OperationResult {
+        self.service
+            .execute_import(&plan.confirmation_token.as_ref().unwrap().token)
+            .unwrap()
+    }
+
+    fn open_database(&self) -> Connection {
+        Connection::open(&self.database_path).unwrap()
+    }
+}
+
+fn valid_markdown(name: &str) -> String {
+    format!(
+        "---\nname: {name}\ndescription: A safe local import fixture.\n---\n# Overview\nFixture body.\n"
+    )
+}
+
+#[test]
+fn directory_import_succeeds_through_plan_and_execute() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("directory-import");
+    let plan = fixture.plan_directory(source);
+
+    let result = fixture.execute_plan(&plan);
+
+    assert_eq!(plan.plan.status, OperationPlanStatus::Ready);
+    assert_eq!(result.status, OperationResultStatus::Succeeded);
+    assert!(fixture
+        .target("directory-import")
+        .join("SKILL.md")
+        .is_file());
+}
+
+#[test]
+fn selected_skill_markdown_file_imports_its_parent_directory() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("file-import");
+    let selection = fixture
+        .service
+        .select_source(ImportSourceKind::File, source.join("SKILL.md"))
+        .unwrap();
+    let plan = fixture.service.plan_import(&selection.token).unwrap();
+
+    let result = fixture.execute_plan(&plan);
+
+    assert_eq!(result.status, OperationResultStatus::Succeeded);
+    assert!(fixture.target("file-import").is_dir());
+}
+
+#[test]
+fn successful_import_persists_complete_install_receipt() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan_directory(fixture.write_valid_skill("receipt"));
+    let result = fixture.execute_plan(&plan);
+    let connection = fixture.open_database();
+    let receipt: (String, String, String, i64, String) = connection
+        .query_row(
+            "SELECT skill_id, source_type, installed_hash, installed_at, managed_by FROM install_receipts",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .unwrap();
+
+    assert_eq!(receipt.0, result.skill_id);
+    assert_eq!(receipt.1, "local");
+    assert_eq!(receipt.2, result.installed_hash);
+    assert!(receipt.3 > 0);
+    assert_eq!(receipt.4, "codex-o");
+}
+
+#[test]
+fn successful_import_persists_management_operation_result() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan_directory(fixture.write_valid_skill("operation-record"));
+    let result = fixture.execute_plan(&plan);
+    let connection = fixture.open_database();
+    let operation: (String, String, String, String, String, i64) = connection
+        .query_row(
+            "SELECT id, skill_id, operation, status, result_json, completed_at FROM management_operations",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .unwrap();
+
+    assert_eq!(operation.0, result.operation_id);
+    assert_eq!(operation.1, result.skill_id);
+    assert_eq!(operation.2, "skill_import");
+    assert_eq!(operation.3, "succeeded");
+    assert_eq!(operation.4, "\"succeeded\"");
+    assert!(operation.5 > 0);
+}
+
+#[test]
+fn successful_import_refreshes_catalog_with_managed_skill() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan_directory(fixture.write_valid_skill("catalog-refresh"));
+    let result = fixture.execute_plan(&plan);
+
+    assert_eq!(
+        fixture.service.catalog.managed_skill_id("catalog-refresh"),
+        Some(result.skill_id)
+    );
+}
+
+#[test]
+fn existing_target_produces_conflict_plan_without_confirmation() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("conflict");
+    fs::create_dir_all(fixture.target("conflict")).unwrap();
+
+    let plan = fixture.plan_directory(source);
+
+    assert_eq!(plan.plan.status, OperationPlanStatus::Conflict);
+    assert!(plan.confirmation_token.is_none());
+}
+
+#[test]
+fn target_created_after_confirmation_blocks_execution_without_overwrite() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan_directory(fixture.write_valid_skill("late-conflict"));
+    fs::create_dir_all(fixture.target("late-conflict")).unwrap();
+    fs::write(fixture.target("late-conflict").join("keep.txt"), "keep").unwrap();
+
+    let error = fixture
+        .service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "conflict_detected");
+    assert_eq!(
+        fs::read_to_string(fixture.target("late-conflict").join("keep.txt")).unwrap(),
+        "keep"
+    );
+}
+
+#[test]
+fn read_only_provider_permission_rejects_before_writing() {
+    let mut fixture = Fixture::new();
+    fixture.service.import_allowed = false;
+    let plan = fixture.plan_directory(fixture.write_valid_skill("read-only"));
+
+    let error = fixture
+        .service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "provider_read_only");
+    assert!(!fixture.target("read-only").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_resource_is_rejected_without_following_target() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("symlinked");
+    fs::create_dir_all(source.join("resources")).unwrap();
+    let outside = fixture.temporary.path().join("outside.txt");
+    fs::write(&outside, "outside").unwrap();
+    symlink(&outside, source.join("resources/link.txt")).unwrap();
+    let selection = fixture
+        .service
+        .select_source(ImportSourceKind::Directory, source)
+        .unwrap();
+
+    let error = fixture.service.plan_import(&selection.token).unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+    assert_eq!(fs::read_to_string(outside).unwrap(), "outside");
+}
+
+#[test]
+fn parent_path_components_are_rejected() {
+    assert!(!valid_relative_path("../escape"));
+    assert!(!valid_relative_path("resources/../../escape"));
+}
+
+#[test]
+fn unknown_top_level_file_is_rejected() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("unknown-layout");
+    fs::write(source.join("unexpected.txt"), "unexpected").unwrap();
+
+    let error = inspect_source(ImportSourceKind::Directory, &source).unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+}
+
+#[test]
+fn oversized_resource_is_rejected_before_copy() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("oversized");
+    fs::create_dir_all(source.join("resources")).unwrap();
+    let resource = fs::File::create(source.join("resources/large.bin")).unwrap();
+    resource.set_len(MAX_IMPORT_RESOURCE_BYTES + 1).unwrap();
+
+    let error = inspect_source(ImportSourceKind::Directory, &source).unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+}
+
+#[test]
+fn total_import_size_limit_is_enforced() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("total-size");
+    fs::create_dir_all(source.join("resources")).unwrap();
+    for index in 0..3 {
+        let resource = fs::File::create(source.join(format!("resources/{index}.bin"))).unwrap();
+        resource.set_len(12 * 1024 * 1024).unwrap();
+    }
+
+    let error = inspect_source(ImportSourceKind::Directory, &source).unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+}
+
+#[test]
+fn file_count_limit_is_enforced() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("file-count");
+    fs::create_dir_all(source.join("resources")).unwrap();
+    for index in 0..MAX_IMPORT_FILES {
+        fs::write(source.join(format!("resources/{index}.txt")), "x").unwrap();
+    }
+
+    let error = inspect_source(ImportSourceKind::Directory, &source).unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+}
+
+#[test]
+fn invalid_utf8_skill_fails_in_staging_and_leaves_no_target() {
+    let fixture = Fixture::new();
+    let source = fixture.source_root("invalid-utf8");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("SKILL.md"), [0xff, 0xfe]).unwrap();
+    let plan = fixture.plan_directory(source);
+
+    let error = fixture
+        .service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+    assert!(!fixture.target("invalid-utf8").exists());
+    assert!(staging_directories(&fixture).is_empty());
+}
+
+#[test]
+fn malformed_frontmatter_fails_in_staging() {
+    let fixture = Fixture::new();
+    let source = fixture.source_root("bad-frontmatter");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("SKILL.md"), "---\nname: [\n---\n# Broken").unwrap();
+    let plan = fixture.plan_directory(source);
+
+    let error = fixture
+        .service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+    assert!(!fixture.target("bad-frontmatter").exists());
+}
+
+#[test]
+fn missing_description_is_rejected() {
+    let fixture = Fixture::new();
+    let source = fixture.source_root("missing-description");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("SKILL.md"),
+        "---\nname: missing-description\n---\n# Overview\n",
+    )
+    .unwrap();
+    let plan = fixture.plan_directory(source);
+
+    let error = fixture
+        .service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+}
+
+#[test]
+fn declared_name_must_match_safe_target_directory() {
+    let fixture = Fixture::new();
+    let source = fixture.source_root("directory-name");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("SKILL.md"), valid_markdown("different-name")).unwrap();
+    let plan = fixture.plan_directory(source);
+
+    let error = fixture
+        .service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+}
+
+#[test]
+fn expired_selection_token_has_stable_error_and_zero_writes() {
+    let fixture = Fixture::new();
+    let selection = fixture
+        .service
+        .select_source(
+            ImportSourceKind::Directory,
+            fixture.write_valid_skill("expired-selection"),
+        )
+        .unwrap();
+    fixture.service.expire_selection(&selection.token);
+
+    let error = fixture.service.plan_import(&selection.token).unwrap_err();
+
+    assert_eq!(error.code, "selection_token_expired");
+    assert!(!fixture.target("expired-selection").exists());
+}
+
+#[test]
+fn expired_confirmation_token_has_stable_error() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan_directory(fixture.write_valid_skill("expired-confirmation"));
+    let token = plan.confirmation_token.unwrap().token;
+    fixture.service.expire_confirmation(&token);
+
+    let error = fixture.service.execute_import(&token).unwrap_err();
+
+    assert_eq!(error.code, "confirmation_token_expired");
+    assert!(!fixture.target("expired-confirmation").exists());
+}
+
+#[test]
+fn confirmation_token_is_one_time_and_replay_is_rejected() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan_directory(fixture.write_valid_skill("one-time"));
+    let token = plan.confirmation_token.as_ref().unwrap().token.clone();
+    let _result = fixture.execute_plan(&plan);
+
+    let error = fixture.service.execute_import(&token).unwrap_err();
+
+    assert_eq!(error.code, "confirmation_token_replayed");
+}
+
+#[test]
+fn source_hash_change_after_confirmation_is_rejected() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("changed-source");
+    let plan = fixture.plan_directory(source.clone());
+    fs::write(
+        source.join("SKILL.md"),
+        format!("{}\nchanged", valid_markdown("changed-source")),
+    )
+    .unwrap();
+
+    let error = fixture
+        .service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "source_changed");
+    assert!(!fixture.target("changed-source").exists());
+}
+
+#[test]
+fn unavailable_database_rejects_before_target_write() {
+    let fixture = Fixture::new();
+    let roots = ProviderRoots::new(
+        fixture.temporary.path().join("no-db-home"),
+        fixture.temporary.path().join("no-db-repo"),
+        fixture.temporary.path().join("no-db-plugin"),
+    );
+    let catalog = SkillCatalog::new(roots);
+    let service = OperationsService::new(None, catalog, DiagnosticService::new(None, None));
+    let source = fixture.write_valid_skill("no-database");
+    let selection = service
+        .select_source(ImportSourceKind::Directory, source)
+        .unwrap();
+    let plan = service.plan_import(&selection.token).unwrap();
+
+    let error = service
+        .execute_import(&plan.confirmation_token.unwrap().token)
+        .unwrap_err();
+
+    assert_eq!(error.code, "database_unavailable");
+    assert!(!fixture
+        .temporary
+        .path()
+        .join("no-db-home/.agents/skills/no-database")
+        .exists());
+}
+
+#[test]
+fn operation_plan_serialization_contains_no_path_or_token() {
+    let fixture = Fixture::new();
+    let plan = fixture.plan_directory(fixture.write_valid_skill("safe-dto"));
+
+    let serialized = serde_json::to_string(&plan.plan).unwrap();
+
+    assert!(!serialized.contains(fixture.temporary.path().to_str().unwrap()));
+    assert!(!serialized.contains(&plan.confirmation_token.unwrap().token));
+    assert!(serialized.contains("user_global"));
+}
+
+#[test]
+fn selection_and_confirmation_tokens_are_not_persisted() {
+    let fixture = Fixture::new();
+    let selection = fixture
+        .service
+        .select_source(
+            ImportSourceKind::Directory,
+            fixture.write_valid_skill("memory-tokens"),
+        )
+        .unwrap();
+    let plan = fixture.service.plan_import(&selection.token).unwrap();
+    let confirmation = plan.confirmation_token.as_ref().unwrap().token.clone();
+    let _result = fixture.execute_plan(&plan);
+    let database_bytes = fs::read(&fixture.database_path).unwrap();
+
+    assert!(!database_bytes
+        .windows(selection.token.len())
+        .any(|window| window == selection.token.as_bytes()));
+    assert!(!database_bytes
+        .windows(confirmation.len())
+        .any(|window| window == confirmation.as_bytes()));
+}
+
+#[test]
+fn nested_second_skill_marker_is_rejected() {
+    let fixture = Fixture::new();
+    let source = fixture.write_valid_skill("multiple-roots");
+    fs::create_dir_all(source.join("references/other")).unwrap();
+    fs::write(
+        source.join("references/other/SKILL.md"),
+        valid_markdown("other"),
+    )
+    .unwrap();
+
+    let error = inspect_source(ImportSourceKind::Directory, &source).unwrap_err();
+
+    assert_eq!(error.code, "import_source_invalid");
+}
+
+fn staging_directories(fixture: &Fixture) -> Vec<PathBuf> {
+    let root = fixture.home.join(".agents/skills");
+    fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .filter(|name| name.starts_with(".codex-o-import-"))
+                .map(|_| entry.path())
+        })
+        .collect()
+}
