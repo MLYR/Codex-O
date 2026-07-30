@@ -83,7 +83,7 @@ export function OperationPlanModal({
           {plannedImport.plan.source ? (
             <>
               <div className="is-wide">
-                <dt>GitHub 仓库</dt>
+                <dt>{plannedImport.plan.source.source_type === "market" ? "官方市场来源" : "GitHub 仓库"}</dt>
                 <dd>{plannedImport.plan.source.repository_url}</dd>
               </div>
               <div>

@@ -3,7 +3,7 @@
 mod github;
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::Read,
     path::{Component, Path, PathBuf},
@@ -28,10 +28,10 @@ use crate::{
 const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
 const SELECTION_TTL_MS: u64 = 10 * 60 * 1000;
 const CONFIRMATION_TTL_MS: u64 = 5 * 60 * 1000;
-const MAX_IMPORT_FILES: usize = 256;
-const MAX_IMPORT_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
-const MAX_IMPORT_TEXT_BYTES: u64 = 1024 * 1024;
-const MAX_IMPORT_RESOURCE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_IMPORT_FILES: usize = 256;
+pub(crate) const MAX_IMPORT_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const MAX_IMPORT_TEXT_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_IMPORT_RESOURCE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -220,11 +220,67 @@ impl OperationError {
         }
     }
 
-    const fn import_failed() -> Self {
+    pub(crate) const fn import_failed() -> Self {
         Self {
             code: "import_failed",
             message: "The Skill import did not complete.",
             recovery: "Review the import plan and try again.",
+        }
+    }
+
+    pub(crate) const fn market_item_unavailable() -> Self {
+        Self {
+            code: "market_item_unavailable",
+            message: "The selected market Skill is no longer available.",
+            recovery: "Refresh the official market and review the Skill again.",
+        }
+    }
+
+    pub(crate) const fn market_source_changed() -> Self {
+        Self {
+            code: "market_source_changed",
+            message: "The selected market source changed after synchronization.",
+            recovery: "Refresh the official market and review the updated Skill.",
+        }
+    }
+
+    pub(crate) const fn market_source_invalid() -> Self {
+        Self {
+            code: "market_source_invalid",
+            message: "The selected market Skill failed safety validation.",
+            recovery: "Refresh the official market or use a reviewed local/GitHub source.",
+        }
+    }
+
+    pub(crate) const fn market_offline() -> Self {
+        Self {
+            code: "market_offline",
+            message: "The official market could not be reached.",
+            recovery: "Check the network connection and review the import again.",
+        }
+    }
+
+    pub(crate) const fn market_timeout() -> Self {
+        Self {
+            code: "market_timeout",
+            message: "The market import request timed out.",
+            recovery: "Try again later or use local/GitHub install.",
+        }
+    }
+
+    pub(crate) const fn market_rate_limited() -> Self {
+        Self {
+            code: "market_rate_limited",
+            message: "GitHub temporarily limited the market import request.",
+            recovery: "Wait before reviewing the market import again.",
+        }
+    }
+
+    pub(crate) const fn market_protocol_error() -> Self {
+        Self {
+            code: "market_protocol_error",
+            message: "The official market returned an unsupported response.",
+            recovery: "Refresh the market later or use local/GitHub install.",
         }
     }
 
@@ -299,7 +355,7 @@ enum PendingImportSource {
         kind: ImportSourceKind,
         source_hash: String,
     },
-    Github {
+    Remote {
         operation_root: PathBuf,
         staging_home: PathBuf,
         staged_skill: PathBuf,
@@ -310,7 +366,7 @@ enum PendingImportSource {
 
 impl PendingImportSource {
     fn cleanup(&self) {
-        if let Self::Github { operation_root, .. } = self {
+        if let Self::Remote { operation_root, .. } = self {
             let _ = fs::remove_dir_all(operation_root);
         }
     }
@@ -557,7 +613,150 @@ impl OperationsService {
         })
     }
 
-    fn execute_import(&self, confirmation_token: &str) -> Result<OperationResult, OperationError> {
+    pub(crate) async fn plan_market_import(
+        &self,
+        source: &crate::market::MarketSelection,
+        endpoints: &crate::market::MarketEndpoints,
+    ) -> Result<PlannedImport, OperationError> {
+        let operation_id = random_token().ok_or_else(OperationError::selection_unavailable)?;
+        let operation_root = self.create_github_operation_root(&operation_id)?;
+        let downloaded = tokio::time::timeout(
+            std::time::Duration::from_secs(45),
+            crate::market::download_market_skill(endpoints, source, &operation_root),
+        )
+        .await;
+        let selected = match downloaded {
+            Ok(Ok(path)) => path,
+            Ok(Err(error)) => {
+                let _ = fs::remove_dir_all(&operation_root);
+                return Err(error);
+            }
+            Err(_) => {
+                let _ = fs::remove_dir_all(&operation_root);
+                return Err(OperationError::market_timeout());
+            }
+        };
+        let prepared = (|| {
+            let selected_summary = inspect_source(ImportSourceKind::Directory, &selected)
+                .map_err(|_| OperationError::market_source_invalid())?;
+            let staging_home = operation_root.join("home");
+            let staged_skill = staging_home
+                .join(".agents")
+                .join("skills")
+                .join(&selected_summary.target_name);
+            copy_source_to_staging(&selected_summary, &staged_skill)?;
+            let staged = inspect_source(ImportSourceKind::Directory, &staged_skill)?;
+            if staged.source_hash != selected_summary.source_hash {
+                return Err(OperationError::source_changed());
+            }
+            let facts = self
+                .catalog
+                .validate_import_staging(staging_home.clone(), &staged.target_name)
+                .map_err(|_| OperationError::import_source_invalid())?;
+            validate_import_metadata(&facts.name, &facts.description, &staged.target_name)?;
+            let provenance = OperationSource {
+                source_type: "market".to_owned(),
+                repository_url: source.repository_url.clone(),
+                repo_ref: "main".to_owned(),
+                commit_sha: source.commit_sha.clone(),
+                subdirectory: source.subdirectory.clone(),
+            };
+            let conflict = path_exists(&self.target_root.join(&staged.target_name));
+            let plan = OperationPlan {
+                id: operation_id,
+                operation: ManagementOperation::SkillImport,
+                status: if conflict {
+                    OperationPlanStatus::Conflict
+                } else {
+                    OperationPlanStatus::Ready
+                },
+                impact: OperationImpact {
+                    target_provider_id: "user_global".to_owned(),
+                    skill_name: staged.target_name.clone(),
+                    file_count: staged.file_count,
+                    total_size_bytes: staged.total_size_bytes,
+                    relative_files: staged
+                        .files
+                        .iter()
+                        .filter_map(|(relative, _)| relative.to_str().map(str::to_owned))
+                        .collect(),
+                    entry_id: None,
+                    requires_acknowledgement: false,
+                },
+                source: Some(provenance.clone()),
+            };
+            Ok((
+                plan,
+                PendingImportSource::Remote {
+                    operation_root: operation_root.clone(),
+                    staging_home,
+                    staged_skill,
+                    source_hash: staged.source_hash,
+                    provenance,
+                },
+            ))
+        })();
+        match prepared {
+            Ok((plan, pending)) => self.finalize_remote_plan(plan, pending, &operation_root),
+            Err(error) => {
+                let _ = fs::remove_dir_all(&operation_root);
+                Err(error)
+            }
+        }
+    }
+
+    fn finalize_remote_plan(
+        &self,
+        plan: OperationPlan,
+        pending: PendingImportSource,
+        operation_root: &Path,
+    ) -> Result<PlannedImport, OperationError> {
+        if plan.status == OperationPlanStatus::Conflict {
+            let _ = fs::remove_dir_all(operation_root);
+            return Ok(PlannedImport {
+                plan,
+                confirmation_token: None,
+            });
+        }
+        let token = match random_token() {
+            Some(token) => token,
+            None => {
+                let _ = fs::remove_dir_all(operation_root);
+                return Err(OperationError::selection_unavailable());
+            }
+        };
+        let expires_at_ms = now_ms().saturating_add(CONFIRMATION_TTL_MS);
+        lock_unpoisoned(&self.confirmations).insert(
+            token.clone(),
+            PendingConfirmation {
+                plan: plan.clone(),
+                source: pending,
+                expires_at_ms,
+                consumed: false,
+            },
+        );
+        self.diagnostics.emit(
+            DiagnosticRecord::new(
+                DiagnosticLevel::Info,
+                DiagnosticDomain::Operations,
+                DiagnosticEventCode::OperationPlanned,
+                DiagnosticResult::Succeeded,
+            )
+            .with_counts(Some(plan.impact.file_count as u64), None),
+        );
+        Ok(PlannedImport {
+            plan,
+            confirmation_token: Some(ConfirmationToken {
+                token,
+                expires_at_ms,
+            }),
+        })
+    }
+
+    pub(crate) fn execute_import(
+        &self,
+        confirmation_token: &str,
+    ) -> Result<OperationResult, OperationError> {
         if !self.import_allowed {
             self.emit_failure(DiagnosticErrorCode::OperationExecutionFailed);
             return Err(OperationError::provider_read_only());
@@ -569,7 +768,7 @@ impl OperationsService {
         }
         let mut cleanup_root = match &confirmation.source {
             PendingImportSource::Local { .. } => None,
-            PendingImportSource::Github { operation_root, .. } => Some(operation_root.clone()),
+            PendingImportSource::Remote { operation_root, .. } => Some(operation_root.clone()),
         };
         let execution = (|| {
             let (staging_home, staged_skill, expected_hash, target_name, provenance) =
@@ -603,7 +802,7 @@ impl OperationsService {
                             None,
                         )
                     }
-                    PendingImportSource::Github {
+                    PendingImportSource::Remote {
                         operation_root,
                         staging_home,
                         staged_skill,
@@ -611,7 +810,7 @@ impl OperationsService {
                         provenance,
                     } => {
                         self.validate_github_staging(operation_root, staging_home, staged_skill)?;
-                        github::validate_provenance(provenance)?;
+                        github::validate_remote_provenance(provenance)?;
                         if confirmation.plan.source.as_ref() != Some(provenance) {
                             return Err(OperationError::source_changed());
                         }
@@ -1104,7 +1303,7 @@ impl OperationsService {
         Ok(confirmation.clone())
     }
 
-    fn cancel_import(&self, confirmation_token: &str) -> Result<(), OperationError> {
+    pub(crate) fn cancel_import(&self, confirmation_token: &str) -> Result<(), OperationError> {
         let confirmation = {
             let mut confirmations = lock_unpoisoned(&self.confirmations);
             let confirmation = confirmations
@@ -1135,7 +1334,34 @@ impl OperationsService {
                 params![skill_id],
                 |row| row.get::<_, bool>(0),
             )
-            .map_err(|_| OperationError::database_unavailable())
+        .map_err(|_| OperationError::database_unavailable())
+    }
+
+    pub(crate) fn installed_market_sources(&self, repository_url: &str) -> HashSet<String> {
+        let Some(path) = self.database_path.as_deref() else {
+            return HashSet::new();
+        };
+        let Ok(connection) = Connection::open(path) else {
+            return HashSet::new();
+        };
+        let Ok(mut statement) = connection.prepare(
+            "SELECT skill_id, subdirectory FROM install_receipts WHERE source_type = 'market' AND source_url = ?1 AND managed_by = 'codex-o' AND subdirectory IS NOT NULL",
+        ) else {
+            return HashSet::new();
+        };
+        let Ok(rows) = statement.query_map([repository_url], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) else {
+            return HashSet::new();
+        };
+        rows.filter_map(Result::ok)
+            .filter(|(skill_id, _)| {
+                self.catalog
+                    .get_skill_detail(skill_id, false)
+                    .is_ok_and(|detail| detail.summary.provider.id == "user_global")
+            })
+            .map(|(_, subdirectory)| subdirectory)
+            .collect()
     }
 
     fn quarantine_root(&self) -> Result<&Path, OperationError> {

@@ -3,6 +3,7 @@ pub mod app_error;
 pub mod catalog;
 pub mod codex_fixture;
 pub mod db;
+pub mod market;
 pub mod observability;
 pub mod operations;
 pub mod parsing;
@@ -125,12 +126,19 @@ pub fn run() {
                 observability::DiagnosticResult::Succeeded,
             ));
             app.manage(Arc::clone(&diagnostics));
-            app.manage(Arc::new(operations::OperationsService::new(
+            let operations_service = Arc::new(operations::OperationsService::new(
                 database_path.clone(),
                 app_local_data_directory.clone(),
                 catalog.clone(),
                 Arc::clone(&diagnostics),
+            ));
+            app.manage(Arc::new(market::MarketService::new(
+                app_local_data_directory
+                    .as_ref()
+                    .map(|directory| directory.join("market-cache.json")),
+                Arc::clone(&operations_service),
             )));
+            app.manage(operations_service);
             app.manage(analysis_queue);
             app.manage(analysis_service);
             app.manage(settings_service);
@@ -168,6 +176,9 @@ pub fn run() {
             operations::plan_github_import,
             operations::execute_skill_import,
             operations::cancel_skill_import,
+            market::get_market_catalog,
+            market::refresh_market_catalog,
+            market::plan_market_import,
             operations::plan_skill_quarantine,
             operations::execute_skill_quarantine,
             operations::list_quarantine_entries,

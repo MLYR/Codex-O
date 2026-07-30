@@ -29,7 +29,7 @@ export interface OperationPlan {
 }
 
 export interface OperationSource {
-  source_type: "github";
+  source_type: "github" | "market";
   repository_url: string;
   repo_ref: string;
   commit_sha: string;

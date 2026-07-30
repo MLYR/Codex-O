@@ -12,12 +12,10 @@ use tokio::time::timeout;
 use zip::ZipArchive;
 
 use super::{
-    copy_source_to_staging, inspect_source, lock_unpoisoned, now_ms, path_exists, random_token,
-    valid_operation_id, validate_import_metadata, ConfirmationToken, DiagnosticDomain,
-    DiagnosticEventCode, DiagnosticLevel, DiagnosticRecord, DiagnosticResult, ImportSourceKind,
-    ManagementOperation, OperationError, OperationImpact, OperationPlan, OperationPlanStatus,
-    OperationSource, OperationsService, PendingConfirmation, PendingImportSource, PlannedImport,
-    CONFIRMATION_TTL_MS,
+    copy_source_to_staging, inspect_source, path_exists, random_token, valid_operation_id,
+    validate_import_metadata, ImportSourceKind, ManagementOperation, OperationError,
+    OperationImpact, OperationPlan, OperationPlanStatus, OperationSource, OperationsService,
+    PendingImportSource, PlannedImport,
 };
 
 const API_RESPONSE_LIMIT: usize = 1024 * 1024;
@@ -264,46 +262,7 @@ impl OperationsService {
                 return Err(error);
             }
         };
-        if plan.status == OperationPlanStatus::Conflict {
-            let _ = fs::remove_dir_all(&operation_root);
-            return Ok(PlannedImport {
-                plan,
-                confirmation_token: None,
-            });
-        }
-        let token = match random_token() {
-            Some(token) => token,
-            None => {
-                let _ = fs::remove_dir_all(&operation_root);
-                return Err(OperationError::selection_unavailable());
-            }
-        };
-        let expires_at_ms = now_ms().saturating_add(CONFIRMATION_TTL_MS);
-        lock_unpoisoned(&self.confirmations).insert(
-            token.clone(),
-            PendingConfirmation {
-                plan: plan.clone(),
-                source: pending,
-                expires_at_ms,
-                consumed: false,
-            },
-        );
-        self.diagnostics.emit(
-            DiagnosticRecord::new(
-                DiagnosticLevel::Info,
-                DiagnosticDomain::Operations,
-                DiagnosticEventCode::OperationPlanned,
-                DiagnosticResult::Succeeded,
-            )
-            .with_counts(Some(plan.impact.file_count as u64), None),
-        );
-        Ok(PlannedImport {
-            plan,
-            confirmation_token: Some(ConfirmationToken {
-                token,
-                expires_at_ms,
-            }),
-        })
+        self.finalize_remote_plan(plan, pending, &operation_root)
     }
 
     async fn prepare_github_plan(
@@ -368,7 +327,7 @@ impl OperationsService {
         };
         Ok((
             plan,
-            PendingImportSource::Github {
+            PendingImportSource::Remote {
                 operation_root: operation_root.to_path_buf(),
                 staging_home,
                 staged_skill,
@@ -378,7 +337,10 @@ impl OperationsService {
         ))
     }
 
-    fn create_github_operation_root(&self, operation_id: &str) -> Result<PathBuf, OperationError> {
+    pub(super) fn create_github_operation_root(
+        &self,
+        operation_id: &str,
+    ) -> Result<PathBuf, OperationError> {
         let root = self
             .github_staging_root
             .as_deref()
@@ -432,16 +394,28 @@ impl OperationsService {
     }
 }
 
-pub(super) fn validate_provenance(source: &OperationSource) -> Result<(), OperationError> {
-    if source.source_type != "github"
-        || !valid_commit_sha(&source.commit_sha)
-        || parse_source(
+pub(super) fn validate_remote_provenance(source: &OperationSource) -> Result<(), OperationError> {
+    let valid = match source.source_type.as_str() {
+        "github" => parse_source(
             &source.repository_url,
             &source.repo_ref,
             &source.subdirectory,
         )
-        .is_err()
-    {
+        .is_ok(),
+        "market" => {
+            let segments = source.subdirectory.split('/').collect::<Vec<_>>();
+            source.repository_url == "https://github.com/openai/plugins"
+                && source.repo_ref == "main"
+                && segments.len() == 4
+                && segments[0] == "plugins"
+                && !segments[1].is_empty()
+                && segments[2] == "skills"
+                && !segments[3].is_empty()
+                && valid_subdirectory(&source.subdirectory)
+        }
+        _ => false,
+    };
+    if !valid_commit_sha(&source.commit_sha) || !valid {
         return Err(OperationError::source_changed());
     }
     Ok(())
@@ -1122,6 +1096,34 @@ mod tests {
             assert_eq!(
                 parse_source(url, "main", "").unwrap_err().code,
                 "github_source_invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn market_provenance_requires_the_official_four_segment_skill_path() {
+        let valid = OperationSource {
+            source_type: "market".to_owned(),
+            repository_url: "https://github.com/openai/plugins".to_owned(),
+            repo_ref: "main".to_owned(),
+            commit_sha: SHA.to_owned(),
+            subdirectory: "plugins/example/skills/reviewer".to_owned(),
+        };
+        assert!(validate_remote_provenance(&valid).is_ok());
+
+        for subdirectory in [
+            "plugins/example/reviewer",
+            "plugins/example/other/skills/reviewer",
+            "plugins/example/skills/reviewer/extra",
+        ] {
+            assert_eq!(
+                validate_remote_provenance(&OperationSource {
+                    subdirectory: subdirectory.to_owned(),
+                    ..valid.clone()
+                })
+                .unwrap_err()
+                .code,
+                "source_changed"
             );
         }
     }
