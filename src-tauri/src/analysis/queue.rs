@@ -3,6 +3,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -151,6 +154,8 @@ struct QueueInner {
     sink: Arc<dyn AnalysisProgressSink>,
     semaphore: Arc<Semaphore>,
     jobs: Mutex<HashMap<String, AnalysisJobView>>,
+    #[cfg(test)]
+    enqueue_calls: AtomicUsize,
 }
 
 impl AnalysisQueue {
@@ -169,6 +174,8 @@ impl AnalysisQueue {
                 sink,
                 semaphore: Arc::new(Semaphore::new(concurrency.clamp(1, MAX_CONCURRENCY))),
                 jobs: Mutex::new(HashMap::new()),
+                #[cfg(test)]
+                enqueue_calls: AtomicUsize::new(0),
             }),
         }
     }
@@ -178,6 +185,8 @@ impl AnalysisQueue {
         skill_id: String,
         force: bool,
     ) -> Result<AnalysisEnqueueResult, AnalysisServiceError> {
+        #[cfg(test)]
+        self.inner.enqueue_calls.fetch_add(1, Ordering::SeqCst);
         let Some(analysis_key) = self.inner.executor.job_key(&skill_id)? else {
             return Ok(AnalysisEnqueueResult {
                 job_id: None,
@@ -224,6 +233,11 @@ impl AnalysisQueue {
             status: AnalysisJobStatus::Queued,
             deduplicated: false,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn enqueue_call_count(&self) -> usize {
+        self.inner.enqueue_calls.load(Ordering::SeqCst)
     }
 
     pub fn enqueue_many(

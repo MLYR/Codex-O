@@ -104,7 +104,7 @@ pub(crate) struct MarketEndpoints {
 }
 
 impl MarketEndpoints {
-    fn production() -> Self {
+    pub(crate) fn production() -> Self {
         Self {
             api_base: Url::parse("https://api.github.com/").expect("static GitHub API URL"),
             raw_base: Url::parse("https://raw.githubusercontent.com/")
@@ -408,6 +408,28 @@ async fn fetch_snapshot(
         fetch_json(&client, marketplace_url, endpoints, MARKETPLACE_LIMIT).await?;
     let tree = fetch_tree(&client, endpoints, &commit_sha).await?;
     build_snapshot(document, tree, commit_sha, now_ms())
+}
+
+pub(crate) async fn latest_market_selection(
+    subdirectory: &str,
+    endpoints: &MarketEndpoints,
+) -> Result<MarketSelection, OperationError> {
+    if !valid_market_subdirectory(subdirectory) {
+        return Err(OperationError::market_item_unavailable());
+    }
+    let snapshot = fetch_snapshot(endpoints)
+        .await
+        .map_err(market_failure_to_operation)?;
+    snapshot
+        .items
+        .iter()
+        .find(|item| item.subdirectory == subdirectory)
+        .map(|item| MarketSelection {
+            repository_url: snapshot.repository_url.clone(),
+            commit_sha: snapshot.commit_sha.clone(),
+            subdirectory: item.subdirectory.clone(),
+        })
+        .ok_or_else(OperationError::market_item_unavailable)
 }
 
 async fn fetch_tree(

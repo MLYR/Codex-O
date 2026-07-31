@@ -28,7 +28,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const PLAN_TIMEOUT: Duration = Duration::from_secs(45);
 
-pub(super) fn cleanup_abandoned_staging(root: &Path) {
+pub(crate) fn cleanup_abandoned_staging(root: &Path) {
     let Ok(metadata) = fs::symlink_metadata(root) else {
         return;
     };
@@ -61,14 +61,14 @@ struct GithubSource {
 }
 
 #[derive(Clone)]
-pub(super) struct GithubEndpoints {
+pub(crate) struct GithubEndpoints {
     api_base: Url,
     archive_base: Url,
     test_origin: Option<String>,
 }
 
 impl GithubEndpoints {
-    fn production() -> Self {
+    pub(crate) fn production() -> Self {
         Self {
             api_base: Url::parse("https://api.github.com/").expect("static GitHub API URL"),
             archive_base: Url::parse("https://codeload.github.com/")
@@ -78,7 +78,7 @@ impl GithubEndpoints {
     }
 
     #[cfg(test)]
-    pub(super) fn loopback(origin: &str) -> Self {
+    pub(crate) fn loopback(origin: &str) -> Self {
         let mut base = Url::parse(origin).expect("valid loopback fixture origin");
         base.set_path("/");
         base.set_query(None);
@@ -272,11 +272,8 @@ impl OperationsService {
         operation_root: &Path,
         endpoints: &GithubEndpoints,
     ) -> Result<(OperationPlan, PendingImportSource), OperationError> {
-        let client = github_client()?;
-        let commit_sha = resolve_commit(&client, source, endpoints).await?;
-        let archive = download_archive(&client, source, &commit_sha, endpoints).await?;
-        let repository_root = extract_archive(&archive, operation_root)?;
-        let selected = select_skill_directory(&repository_root, &source.subdirectory)?;
+        let (selected, provenance) =
+            download_parsed_github_skill(source, None, operation_root, endpoints).await?;
         let selected_summary = inspect_source(ImportSourceKind::Directory, &selected)
             .map_err(|_| OperationError::github_skill_not_found())?;
         let staging_home = operation_root.join("home");
@@ -294,13 +291,6 @@ impl OperationsService {
             .validate_import_staging(staging_home.clone(), &staged.target_name)
             .map_err(|_| OperationError::import_source_invalid())?;
         validate_import_metadata(&facts.name, &facts.description, &staged.target_name)?;
-        let provenance = OperationSource {
-            source_type: "github".to_owned(),
-            repository_url: source.repository_url.clone(),
-            repo_ref: source.reference.clone(),
-            commit_sha,
-            subdirectory: source.subdirectory.clone(),
-        };
         let conflict = path_exists(&self.target_root.join(&staged.target_name));
         let plan = OperationPlan {
             id: operation_id.to_owned(),
@@ -392,6 +382,43 @@ impl OperationsService {
         }
         Ok(())
     }
+}
+
+pub(crate) async fn download_github_skill(
+    repository_url: &str,
+    reference: &str,
+    subdirectory: &str,
+    fixed_commit: Option<&str>,
+    operation_root: &Path,
+    endpoints: &GithubEndpoints,
+) -> Result<(PathBuf, OperationSource), OperationError> {
+    let source = parse_source(repository_url, reference, subdirectory)?;
+    download_parsed_github_skill(&source, fixed_commit, operation_root, endpoints).await
+}
+
+async fn download_parsed_github_skill(
+    source: &GithubSource,
+    fixed_commit: Option<&str>,
+    operation_root: &Path,
+    endpoints: &GithubEndpoints,
+) -> Result<(PathBuf, OperationSource), OperationError> {
+    let client = github_client()?;
+    let commit_sha = match fixed_commit {
+        Some(commit) if valid_commit_sha(commit) => commit.to_ascii_lowercase(),
+        Some(_) => return Err(OperationError::source_changed()),
+        None => resolve_commit(&client, source, endpoints).await?,
+    };
+    let archive = download_archive(&client, source, &commit_sha, endpoints).await?;
+    let repository_root = extract_archive(&archive, operation_root)?;
+    let selected = select_skill_directory(&repository_root, &source.subdirectory)?;
+    let provenance = OperationSource {
+        source_type: "github".to_owned(),
+        repository_url: source.repository_url.clone(),
+        repo_ref: source.reference.clone(),
+        commit_sha,
+        subdirectory: source.subdirectory.clone(),
+    };
+    Ok((selected, provenance))
 }
 
 pub(super) fn validate_remote_provenance(source: &OperationSource) -> Result<(), OperationError> {
@@ -944,6 +971,8 @@ mod tests {
         stream: &mut TcpStream,
         handler: &Arc<impl Fn(&str) -> Vec<u8> + Send + Sync + 'static>,
     ) {
+        // Accepted sockets may inherit nonblocking mode on macOS; wait for the complete request.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();

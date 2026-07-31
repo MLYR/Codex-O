@@ -8,8 +8,9 @@ use crate::{
 };
 
 use super::{
-    inspect_source, valid_relative_path, ImportSourceKind, OperationPlanStatus,
-    OperationResultStatus, OperationsService, MAX_IMPORT_FILES, MAX_IMPORT_RESOURCE_BYTES,
+    copy_source_to_staging, inspect_source, valid_relative_path, write_update_recovery_manifest,
+    ImportSourceKind, OperationPlanStatus, OperationResultStatus, OperationsService,
+    MAX_IMPORT_FILES, MAX_IMPORT_RESOURCE_BYTES,
 };
 
 struct Fixture {
@@ -107,6 +108,296 @@ fn valid_markdown(name: &str) -> String {
     format!(
         "---\nname: {name}\ndescription: A safe local import fixture.\n---\n# Overview\nFixture body.\n"
     )
+}
+
+fn recovery_manifest(
+    fixture: &Fixture,
+    skill_id: &str,
+    target_name: &str,
+    operation_id: &str,
+    new_hash: &str,
+    phase: super::UpdateRecoveryPhase,
+) -> (PathBuf, PathBuf) {
+    let backup_root = fixture
+        .temporary
+        .path()
+        .join("app-local/update-backups")
+        .join(operation_id);
+    let backup_skill = backup_root.join(target_name);
+    fs::create_dir_all(&backup_root).unwrap();
+    let current =
+        inspect_source(ImportSourceKind::Directory, &fixture.target(target_name)).unwrap();
+    copy_source_to_staging(&current, &backup_skill).unwrap();
+    let receipt = fixture.service.install_receipt(skill_id).unwrap();
+    let manifest = super::UpdateRecoveryManifest {
+        version: super::UPDATE_RECOVERY_MANIFEST_VERSION,
+        operation_id: operation_id.to_owned(),
+        skill_id: skill_id.to_owned(),
+        target_name: target_name.to_owned(),
+        old_receipt: super::UpdateRecoveryReceipt::from_old(&receipt),
+        old_hash: current.source_hash,
+        new_receipt: super::UpdateRecoveryReceipt {
+            source_type: "github".to_owned(),
+            source_url: Some("https://github.com/openai/codex".to_owned()),
+            repo_ref: Some("main".to_owned()),
+            commit_sha: Some("2222222222222222222222222222222222222222".to_owned()),
+            subdirectory: Some(format!("skills/{target_name}")),
+            installed_hash: new_hash.to_owned(),
+            installed_at: None,
+            managed_by: "codex-o".to_owned(),
+        },
+        new_hash: new_hash.to_owned(),
+        phase,
+        backup_relative_path: target_name.to_owned(),
+    };
+    write_update_recovery_manifest(&backup_root, &manifest).unwrap();
+    (backup_root, backup_skill)
+}
+
+fn recovery_service(fixture: &Fixture) -> OperationsService {
+    OperationsService::new(
+        Some(fixture.database_path.clone()),
+        Some(fixture.temporary.path().join("app-local")),
+        fixture.service.catalog.clone(),
+        DiagnosticService::new(None, None),
+    )
+}
+
+#[test]
+fn startup_recovery_restores_after_old_directory_was_moved() {
+    let fixture = Fixture::new();
+    let result = fixture.import_skill("recover-moved");
+    let operation_id = "a".repeat(64);
+    let (backup_root, _) = recovery_manifest(
+        &fixture,
+        &result.skill_id,
+        "recover-moved",
+        &operation_id,
+        &"b".repeat(64),
+        super::UpdateRecoveryPhase::OldMoved,
+    );
+    let previous = fixture
+        .target("recover-moved")
+        .parent()
+        .unwrap()
+        .join(format!(
+            ".codex-o-update-{operation_id}/previous/recover-moved"
+        ));
+    fs::create_dir_all(previous.parent().unwrap()).unwrap();
+    fs::rename(fixture.target("recover-moved"), &previous).unwrap();
+
+    let _service = recovery_service(&fixture);
+
+    assert!(fixture.target("recover-moved").is_dir());
+    assert!(!backup_root.exists());
+    assert!(!previous.ancestors().nth(2).unwrap().exists());
+}
+
+#[test]
+fn startup_recovery_cleans_prepared_backup_without_touching_active_skill() {
+    let fixture = Fixture::new();
+    let result = fixture.import_skill("recover-prepared");
+    let operation_id = "f".repeat(64);
+    let (backup_root, _) = recovery_manifest(
+        &fixture,
+        &result.skill_id,
+        "recover-prepared",
+        &operation_id,
+        &"a".repeat(64),
+        super::UpdateRecoveryPhase::Prepared,
+    );
+
+    let _service = recovery_service(&fixture);
+
+    assert!(fixture.target("recover-prepared").is_dir());
+    assert!(!backup_root.exists());
+}
+
+#[test]
+fn startup_recovery_restores_new_files_when_receipt_is_old() {
+    let fixture = Fixture::new();
+    let result = fixture.import_skill("recover-receipt");
+    let operation_id = "b".repeat(64);
+    let new_content = format!("{}\nnew content", valid_markdown("recover-receipt"));
+    let new_source = fixture.temporary.path().join("recover-receipt-new");
+    fs::create_dir_all(&new_source).unwrap();
+    fs::write(new_source.join("SKILL.md"), &new_content).unwrap();
+    let new_hash = inspect_source(ImportSourceKind::Directory, &new_source)
+        .unwrap()
+        .source_hash;
+    let (backup_root, backup_skill) = recovery_manifest(
+        &fixture,
+        &result.skill_id,
+        "recover-receipt",
+        &operation_id,
+        &new_hash,
+        super::UpdateRecoveryPhase::ReplacementInstalled,
+    );
+    let previous = fixture
+        .target("recover-receipt")
+        .parent()
+        .unwrap()
+        .join(format!(
+            ".codex-o-update-{operation_id}/previous/recover-receipt"
+        ));
+    fs::create_dir_all(previous.parent().unwrap()).unwrap();
+    let old = inspect_source(ImportSourceKind::Directory, &backup_skill).unwrap();
+    copy_source_to_staging(&old, &previous).unwrap();
+    fs::write(
+        fixture.target("recover-receipt").join("SKILL.md"),
+        new_content,
+    )
+    .unwrap();
+
+    let _service = recovery_service(&fixture);
+
+    assert!(
+        fs::read_to_string(fixture.target("recover-receipt").join("SKILL.md"))
+            .unwrap()
+            .contains("Fixture body.")
+    );
+    assert!(!backup_root.exists());
+}
+
+#[test]
+fn startup_recovery_cleans_completed_new_files_and_receipt() {
+    let fixture = Fixture::new();
+    let result = fixture.import_skill("recover-complete");
+    let operation_id = "c".repeat(64);
+    let new_content = format!("{}\nnew content", valid_markdown("recover-complete"));
+    let new_source = fixture.temporary.path().join("recover-complete-new");
+    fs::create_dir_all(&new_source).unwrap();
+    fs::write(new_source.join("SKILL.md"), &new_content).unwrap();
+    let new_hash = inspect_source(ImportSourceKind::Directory, &new_source)
+        .unwrap()
+        .source_hash;
+    let (backup_root, _) = recovery_manifest(
+        &fixture,
+        &result.skill_id,
+        "recover-complete",
+        &operation_id,
+        &new_hash,
+        super::UpdateRecoveryPhase::ReceiptPersisted,
+    );
+    fs::write(
+        fixture.target("recover-complete").join("SKILL.md"),
+        new_content,
+    )
+    .unwrap();
+    let receipt_hash = inspect_source(
+        ImportSourceKind::Directory,
+        &fixture.target("recover-complete"),
+    )
+    .unwrap()
+    .source_hash;
+    Connection::open(&fixture.database_path)
+        .unwrap()
+        .execute(
+            "UPDATE install_receipts SET source_type = 'github', source_url = 'https://github.com/openai/codex', repo_ref = 'main', commit_sha = '2222222222222222222222222222222222222222', subdirectory = 'skills/recover-complete', installed_hash = ?1 WHERE skill_id = ?2",
+            rusqlite::params![receipt_hash, result.skill_id],
+        )
+        .unwrap();
+    let _service = recovery_service(&fixture);
+
+    assert!(
+        fs::read_to_string(fixture.target("recover-complete").join("SKILL.md"))
+            .unwrap()
+            .contains("new content")
+    );
+    assert!(!backup_root.exists());
+}
+
+#[test]
+fn startup_recovery_preserves_backup_for_user_modified_target() {
+    let fixture = Fixture::new();
+    let result = fixture.import_skill("recover-ambiguous");
+    let operation_id = "d".repeat(64);
+    let (backup_root, _) = recovery_manifest(
+        &fixture,
+        &result.skill_id,
+        "recover-ambiguous",
+        &operation_id,
+        &"e".repeat(64),
+        super::UpdateRecoveryPhase::ReplacementInstalled,
+    );
+    fs::write(
+        fixture.target("recover-ambiguous").join("SKILL.md"),
+        "user modified after interruption",
+    )
+    .unwrap();
+
+    let _service = recovery_service(&fixture);
+
+    assert_eq!(
+        fs::read_to_string(fixture.target("recover-ambiguous").join("SKILL.md")).unwrap(),
+        "user modified after interruption"
+    );
+    assert!(backup_root.join("recover-ambiguous/SKILL.md").is_file());
+}
+
+#[test]
+fn startup_recovery_is_idempotent_after_successful_restore() {
+    let fixture = Fixture::new();
+    let result = fixture.import_skill("recover-idempotent");
+    let operation_id = "e".repeat(64);
+    let (backup_root, _) = recovery_manifest(
+        &fixture,
+        &result.skill_id,
+        "recover-idempotent",
+        &operation_id,
+        &"f".repeat(64),
+        super::UpdateRecoveryPhase::OldMoved,
+    );
+    let previous = fixture
+        .target("recover-idempotent")
+        .parent()
+        .unwrap()
+        .join(format!(
+            ".codex-o-update-{operation_id}/previous/recover-idempotent"
+        ));
+    fs::create_dir_all(previous.parent().unwrap()).unwrap();
+    fs::rename(fixture.target("recover-idempotent"), &previous).unwrap();
+    let _first = recovery_service(&fixture);
+    let _second = recovery_service(&fixture);
+
+    assert!(fixture.target("recover-idempotent").is_dir());
+    assert!(!backup_root.exists());
+}
+
+#[test]
+fn startup_recovery_rejects_invalid_manifest_without_deleting_backup() {
+    let fixture = Fixture::new();
+    let backup_root = fixture
+        .temporary
+        .path()
+        .join("app-local/update-backups/not-an-operation");
+    fs::create_dir_all(&backup_root).unwrap();
+    fs::write(backup_root.join("manifest.json"), b"{}").unwrap();
+
+    let _service = recovery_service(&fixture);
+
+    assert!(backup_root.exists());
+    assert!(backup_root.join("manifest.json").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn startup_recovery_rejects_symlink_backup_entry() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new();
+    let target = fixture.temporary.path().join("outside-backup");
+    fs::create_dir_all(&target).unwrap();
+    let link = fixture
+        .temporary
+        .path()
+        .join("app-local/update-backups/".to_owned() + &"a".repeat(64));
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    symlink(&target, &link).unwrap();
+
+    let _service = recovery_service(&fixture);
+
+    assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink());
 }
 
 #[test]

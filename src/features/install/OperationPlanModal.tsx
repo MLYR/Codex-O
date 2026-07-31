@@ -16,6 +16,7 @@ export function OperationPlanModal({
   onConfirm,
 }: OperationPlanModalProps) {
   const conflict = plannedImport.plan.status === "conflict";
+  const updating = plannedImport.plan.operation === "skill_update";
   const impact = plannedImport.plan.impact;
 
   useEffect(() => {
@@ -46,15 +47,19 @@ export function OperationPlanModal({
             )}
           </span>
           <div>
-            <h2 id="operation-plan-title">导入计划</h2>
+            <h2 id="operation-plan-title">{updating ? "更新计划" : "导入计划"}</h2>
             <p id="operation-plan-description">
-              {conflict ? "目标已存在，计划不能执行。" : "确认后才会写入受管 User Provider。"}
+              {conflict
+                ? "检测到冲突，计划不能执行。"
+                : updating
+                  ? "确认后将先备份，再替换受管 User Skill。"
+                  : "确认后才会写入受管 User Provider。"}
             </p>
           </div>
           <button
             className="icon-only-button"
             type="button"
-            aria-label="关闭导入计划"
+            aria-label={updating ? "关闭更新计划" : "关闭导入计划"}
             title="关闭"
             disabled={busy}
             onClick={onClose}
@@ -102,6 +107,15 @@ export function OperationPlanModal({
           ) : null}
         </dl>
 
+        {updating && impact.relative_files?.length ? (
+          <div className="operation-update-files">
+            <strong>变更文件</strong>
+            <ul>
+              {impact.relative_files.map((path) => <li key={path}>{path}</li>)}
+            </ul>
+          </div>
+        ) : null}
+
         {conflict ? (
           <p className="operation-conflict" role="alert">
             <strong>conflict_detected</strong>
@@ -122,7 +136,7 @@ export function OperationPlanModal({
               onClick={onConfirm}
             >
               {busy ? <LoaderCircle className="is-spinning" size={15} aria-hidden="true" /> : null}
-              {busy ? "正在导入" : "确认导入"}
+              {busy ? (updating ? "正在更新" : "正在导入") : (updating ? "确认更新" : "确认导入")}
             </button>
           ) : null}
         </footer>

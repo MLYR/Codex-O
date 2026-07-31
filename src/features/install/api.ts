@@ -18,11 +18,12 @@ export interface OperationImpact {
   skill_name: string;
   file_count: number;
   total_size_bytes: number;
+  relative_files?: string[];
 }
 
 export interface OperationPlan {
   id: string;
-  operation: "skill_import";
+  operation: "skill_import" | "skill_update";
   status: OperationPlanStatus;
   impact: OperationImpact;
   source?: OperationSource;

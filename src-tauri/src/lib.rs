@@ -10,6 +10,7 @@ pub mod parsing;
 pub mod providers;
 pub mod secrets;
 pub mod settings;
+pub mod updates;
 
 #[cfg(test)]
 mod m1_gate;
@@ -126,17 +127,25 @@ pub fn run() {
                 observability::DiagnosticResult::Succeeded,
             ));
             app.manage(Arc::clone(&diagnostics));
-            let operations_service = Arc::new(operations::OperationsService::new(
-                database_path.clone(),
-                app_local_data_directory.clone(),
-                catalog.clone(),
-                Arc::clone(&diagnostics),
-            ));
+            let operations_service = Arc::new(
+                operations::OperationsService::new(
+                    database_path.clone(),
+                    app_local_data_directory.clone(),
+                    catalog.clone(),
+                    Arc::clone(&diagnostics),
+                )
+                .with_analysis_queue(analysis_queue.clone()),
+            );
             app.manage(Arc::new(market::MarketService::new(
                 app_local_data_directory
                     .as_ref()
                     .map(|directory| directory.join("market-cache.json")),
                 Arc::clone(&operations_service),
+            )));
+            // Update checks share the catalog and the existing write transaction boundary.
+            app.manage(Arc::new(updates::UpdateService::new(
+                Arc::clone(&operations_service),
+                catalog.clone(),
             )));
             app.manage(operations_service);
             app.manage(analysis_queue);
@@ -189,7 +198,10 @@ pub fn run() {
             operations::plan_quarantine_complete,
             operations::execute_quarantine_complete,
             operations::plan_quarantine_purge,
-            operations::execute_quarantine_purge
+            operations::execute_quarantine_purge,
+            updates::check_skill_updates,
+            updates::plan_skill_update,
+            updates::execute_skill_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

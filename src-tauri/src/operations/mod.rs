@@ -1,6 +1,6 @@
 //! Security boundary for the plan → confirm → execute lifecycle of Skill writes.
 
-mod github;
+pub(crate) mod github;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -18,6 +18,7 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
+    analysis::{AnalysisJobStatus, AnalysisQueue},
     catalog::{QuarantineCandidate, SkillCatalog},
     observability::{
         DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel,
@@ -28,6 +29,8 @@ use crate::{
 const SKILL_MARKDOWN_FILE: &str = "SKILL.md";
 const SELECTION_TTL_MS: u64 = 10 * 60 * 1000;
 const CONFIRMATION_TTL_MS: u64 = 5 * 60 * 1000;
+const UPDATE_RECOVERY_MANIFEST_VERSION: u8 = 1;
+const UPDATE_RECOVERY_MANIFEST_FILE: &str = "manifest.json";
 pub(crate) const MAX_IMPORT_FILES: usize = 256;
 pub(crate) const MAX_IMPORT_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
 pub(crate) const MAX_IMPORT_TEXT_BYTES: u64 = 1024 * 1024;
@@ -44,6 +47,7 @@ pub enum ImportSourceKind {
 #[serde(rename_all = "snake_case")]
 pub enum ManagementOperation {
     SkillImport,
+    SkillUpdate,
     SkillQuarantine,
     SkillRestore,
     QuarantinePurge,
@@ -331,6 +335,46 @@ impl OperationError {
             recovery: "Review the partial quarantine entry before trying another operation.",
         }
     }
+
+    pub(crate) const fn update_unavailable() -> Self {
+        Self {
+            code: "update_unavailable",
+            message: "This Skill update is no longer available.",
+            recovery: "Check for updates again before reviewing a new plan.",
+        }
+    }
+
+    pub(crate) const fn update_conflict() -> Self {
+        Self {
+            code: "update_conflict",
+            message: "The installed Skill has local changes.",
+            recovery: "Keep the local changes; Codex-O will not overwrite this Skill.",
+        }
+    }
+
+    pub(crate) const fn update_receipt_changed() -> Self {
+        Self {
+            code: "update_receipt_changed",
+            message: "The Skill installation receipt changed after checking.",
+            recovery: "Check for updates again before continuing.",
+        }
+    }
+
+    pub(crate) const fn update_failed() -> Self {
+        Self {
+            code: "update_failed",
+            message: "The Skill update did not complete.",
+            recovery: "The previous Skill was restored; check for updates before retrying.",
+        }
+    }
+
+    pub(crate) const fn update_partial() -> Self {
+        Self {
+            code: "update_partial",
+            message: "The Skill update could not be fully rolled back.",
+            recovery: "Keep the app-local update backup and review the diagnostic before retrying.",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -343,9 +387,26 @@ struct SelectedSource {
 #[derive(Clone)]
 struct PendingConfirmation {
     plan: OperationPlan,
-    source: PendingImportSource,
+    action: PendingConfirmationAction,
     expires_at_ms: u64,
     consumed: bool,
+}
+
+#[derive(Clone)]
+enum PendingConfirmationAction {
+    Import(Box<PendingImportSource>),
+    Update(Box<PreparedSkillUpdate>),
+}
+
+impl PendingConfirmationAction {
+    fn cleanup(&self) {
+        match self {
+            Self::Import(source) => source.cleanup(),
+            Self::Update(update) => {
+                let _ = fs::remove_dir_all(&update.operation_root);
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -403,13 +464,129 @@ struct PendingManagedConfirmation {
     consumed: bool,
 }
 
-#[derive(Debug)]
-struct ImportSourceSummary {
-    source_hash: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct InstallReceiptRecord {
+    pub skill_id: String,
+    pub source_type: String,
+    pub source_url: Option<String>,
+    pub repo_ref: Option<String>,
+    pub commit_sha: Option<String>,
+    pub subdirectory: Option<String>,
+    pub installed_hash: String,
+    pub installed_at: i64,
+    pub managed_by: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct PreparedSkillUpdate {
+    pub operation_id: String,
+    pub operation_root: PathBuf,
+    pub staging_home: PathBuf,
+    pub staged_skill: PathBuf,
+    pub skill_id: String,
+    pub target_name: String,
+    pub installed_hash: String,
+    pub current_hash: String,
+    pub remote_hash: String,
+    pub receipt: InstallReceiptRecord,
+    pub provenance: OperationSource,
+    pub relative_files: Vec<String>,
+    pub file_count: usize,
+    pub total_size_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct UpdateRecoveryReceipt {
+    source_type: String,
+    source_url: Option<String>,
+    repo_ref: Option<String>,
+    commit_sha: Option<String>,
+    subdirectory: Option<String>,
+    installed_hash: String,
+    installed_at: Option<i64>,
+    managed_by: String,
+}
+
+impl UpdateRecoveryReceipt {
+    fn from_old(receipt: &InstallReceiptRecord) -> Self {
+        Self {
+            source_type: receipt.source_type.clone(),
+            source_url: receipt.source_url.clone(),
+            repo_ref: receipt.repo_ref.clone(),
+            commit_sha: receipt.commit_sha.clone(),
+            subdirectory: receipt.subdirectory.clone(),
+            installed_hash: receipt.installed_hash.clone(),
+            installed_at: Some(receipt.installed_at),
+            managed_by: receipt.managed_by.clone(),
+        }
+    }
+
+    fn from_new(update: &PreparedSkillUpdate) -> Self {
+        Self {
+            source_type: update.provenance.source_type.clone(),
+            source_url: Some(update.provenance.repository_url.clone()),
+            repo_ref: Some(update.provenance.repo_ref.clone()),
+            commit_sha: Some(update.provenance.commit_sha.clone()),
+            subdirectory: Some(update.provenance.subdirectory.clone()),
+            installed_hash: update.remote_hash.clone(),
+            installed_at: None,
+            managed_by: "codex-o".to_owned(),
+        }
+    }
+
+    fn matches_old(&self, receipt: &InstallReceiptRecord) -> bool {
+        self.source_type == receipt.source_type
+            && self.source_url == receipt.source_url
+            && self.repo_ref == receipt.repo_ref
+            && self.commit_sha == receipt.commit_sha
+            && self.subdirectory == receipt.subdirectory
+            && self.installed_hash == receipt.installed_hash
+            && self.installed_at == Some(receipt.installed_at)
+            && self.managed_by == receipt.managed_by
+    }
+
+    fn matches_new(&self, receipt: &InstallReceiptRecord) -> bool {
+        self.source_type == receipt.source_type
+            && self.source_url == receipt.source_url
+            && self.repo_ref == receipt.repo_ref
+            && self.commit_sha == receipt.commit_sha
+            && self.subdirectory == receipt.subdirectory
+            && self.installed_hash == receipt.installed_hash
+            && self.managed_by == receipt.managed_by
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UpdateRecoveryPhase {
+    Prepared,
+    OldMoved,
+    ReplacementInstalled,
+    ReceiptPersisted,
+    Completed,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct UpdateRecoveryManifest {
+    version: u8,
+    operation_id: String,
+    skill_id: String,
     target_name: String,
-    file_count: usize,
-    total_size_bytes: u64,
-    files: Vec<(PathBuf, PathBuf)>,
+    old_receipt: UpdateRecoveryReceipt,
+    old_hash: String,
+    new_receipt: UpdateRecoveryReceipt,
+    new_hash: String,
+    phase: UpdateRecoveryPhase,
+    backup_relative_path: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct ImportSourceSummary {
+    pub source_hash: String,
+    pub target_name: String,
+    pub file_count: usize,
+    pub total_size_bytes: u64,
+    pub files: Vec<(PathBuf, PathBuf)>,
 }
 
 #[derive(Clone, Debug)]
@@ -442,9 +619,12 @@ pub struct OperationsService {
     database_path: Option<PathBuf>,
     quarantine_root: Option<PathBuf>,
     github_staging_root: Option<PathBuf>,
+    update_staging_root: Option<PathBuf>,
+    update_backup_root: Option<PathBuf>,
     target_root: PathBuf,
     catalog: SkillCatalog,
     diagnostics: Arc<DiagnosticService>,
+    analysis_queue: Option<AnalysisQueue>,
     selections: Mutex<HashMap<String, SelectedSource>>,
     confirmations: Mutex<HashMap<String, PendingConfirmation>>,
     managed_confirmations: Mutex<HashMap<String, PendingManagedConfirmation>>,
@@ -463,6 +643,12 @@ pub struct OperationsService {
     force_delete_entry_failures: Mutex<usize>,
     #[cfg(test)]
     force_move_failure_after: Mutex<Option<usize>>,
+    #[cfg(test)]
+    force_update_database_failure: Mutex<bool>,
+    #[cfg(test)]
+    force_update_catalog_failure: Mutex<bool>,
+    #[cfg(test)]
+    force_update_rollback_failure: Mutex<bool>,
 }
 
 impl OperationsService {
@@ -479,15 +665,26 @@ impl OperationsService {
         if let Some(root) = github_staging_root.as_deref() {
             github::cleanup_abandoned_staging(root);
         }
-        Self {
+        let update_staging_root = app_local_data_root
+            .as_ref()
+            .map(|root| root.join("update-staging"));
+        if let Some(root) = update_staging_root.as_deref() {
+            github::cleanup_abandoned_staging(root);
+        }
+        let service = Self {
             database_path,
             quarantine_root: app_local_data_root
                 .as_ref()
                 .map(|root| root.join("quarantine")),
             github_staging_root,
+            update_staging_root,
+            update_backup_root: app_local_data_root
+                .as_ref()
+                .map(|root| root.join("update-backups")),
             target_root,
             catalog,
             diagnostics,
+            analysis_queue: None,
             selections: Mutex::new(HashMap::new()),
             confirmations: Mutex::new(HashMap::new()),
             managed_confirmations: Mutex::new(HashMap::new()),
@@ -506,6 +703,290 @@ impl OperationsService {
             force_delete_entry_failures: Mutex::new(0),
             #[cfg(test)]
             force_move_failure_after: Mutex::new(None),
+            #[cfg(test)]
+            force_update_database_failure: Mutex::new(false),
+            #[cfg(test)]
+            force_update_catalog_failure: Mutex::new(false),
+            #[cfg(test)]
+            force_update_rollback_failure: Mutex::new(false),
+        };
+        service.recover_pending_updates();
+        service
+    }
+
+    pub fn with_analysis_queue(mut self, analysis_queue: AnalysisQueue) -> Self {
+        self.analysis_queue = Some(analysis_queue);
+        self
+    }
+
+    fn emit_update_recovery_partial(&self) {
+        self.diagnostics.emit(
+            DiagnosticRecord::new(
+                DiagnosticLevel::Warning,
+                DiagnosticDomain::Operations,
+                DiagnosticEventCode::OperationFailed,
+                DiagnosticResult::Degraded,
+            )
+            .with_error(
+                DiagnosticErrorCode::OperationExecutionFailed,
+                false,
+                DiagnosticRecoveryCode::RestartApplication,
+            ),
+        );
+    }
+
+    fn recover_pending_updates(&self) {
+        let Some(root) = self.update_backup_root.as_deref() else {
+            return;
+        };
+        let metadata = match fs::symlink_metadata(root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) => {
+                self.emit_update_recovery_partial();
+                return;
+            }
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            self.emit_update_recovery_partial();
+            return;
+        }
+        let entries = match fs::read_dir(root) {
+            Ok(entries) => entries,
+            Err(_) => {
+                self.emit_update_recovery_partial();
+                return;
+            }
+        };
+        for entry in entries {
+            let Ok(entry) = entry else {
+                self.emit_update_recovery_partial();
+                continue;
+            };
+            let path = entry.path();
+            let is_directory = entry
+                .file_type()
+                .map(|file_type| file_type.is_dir() && !file_type.is_symlink())
+                .unwrap_or(false);
+            if !is_directory || self.recover_pending_update(&path).is_err() {
+                self.emit_update_recovery_partial();
+            }
+        }
+    }
+
+    fn recover_pending_update(&self, backup_root: &Path) -> Result<(), OperationError> {
+        let backup_metadata =
+            fs::symlink_metadata(backup_root).map_err(|_| OperationError::update_partial())?;
+        if backup_metadata.file_type().is_symlink() || !backup_metadata.is_dir() {
+            return Err(OperationError::update_partial());
+        }
+        let operation_id = backup_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(OperationError::update_partial)?;
+        if !valid_operation_id(operation_id) {
+            return Err(OperationError::update_partial());
+        }
+        let manifest_path = backup_root.join(UPDATE_RECOVERY_MANIFEST_FILE);
+        let manifest_metadata =
+            fs::symlink_metadata(&manifest_path).map_err(|_| OperationError::update_partial())?;
+        if manifest_metadata.file_type().is_symlink() || !manifest_metadata.is_file() {
+            return Err(OperationError::update_partial());
+        }
+        let manifest_bytes =
+            fs::read(&manifest_path).map_err(|_| OperationError::update_partial())?;
+        if manifest_bytes.len() > 64 * 1024 {
+            return Err(OperationError::update_partial());
+        }
+        let manifest: UpdateRecoveryManifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|_| OperationError::update_partial())?;
+        if manifest.version != UPDATE_RECOVERY_MANIFEST_VERSION
+            || manifest.operation_id != operation_id
+            || !valid_skill_name(&manifest.target_name)
+            || manifest.backup_relative_path != manifest.target_name
+            || !valid_content_hash(&manifest.old_hash)
+            || !valid_content_hash(&manifest.new_hash)
+        {
+            return Err(OperationError::update_partial());
+        }
+        let backup_skill = backup_root.join(&manifest.backup_relative_path);
+        if backup_skill.parent() != Some(backup_root) {
+            return Err(OperationError::update_partial());
+        }
+        let backup_summary =
+            summarize_tree(&backup_skill).map_err(|_| OperationError::update_partial())?;
+        if backup_summary.content_hash != manifest.old_hash {
+            return Err(OperationError::update_partial());
+        }
+        let receipt = self
+            .install_receipt(&manifest.skill_id)
+            .map_err(|_| OperationError::update_partial())?;
+        let target = self.target_root.join(&manifest.target_name);
+        if target.parent() != Some(self.target_root.as_path()) {
+            return Err(OperationError::update_partial());
+        }
+        let active_hash = if path_exists(&target) {
+            Some(
+                summarize_tree(&target)
+                    .map_err(|_| OperationError::update_partial())?
+                    .content_hash,
+            )
+        } else {
+            None
+        };
+        let swap_root = self
+            .target_root
+            .join(format!(".codex-o-update-{operation_id}"));
+        if path_exists(&swap_root) {
+            let swap_metadata =
+                fs::symlink_metadata(&swap_root).map_err(|_| OperationError::update_partial())?;
+            if swap_metadata.file_type().is_symlink() || !swap_metadata.is_dir() {
+                return Err(OperationError::update_partial());
+            }
+        }
+        let _phase = manifest.phase;
+        if manifest.old_receipt.matches_old(&receipt)
+            && active_hash.as_deref() == Some(manifest.old_hash.as_str())
+        {
+            return self.cleanup_recovered_update(backup_root, &swap_root);
+        }
+        if manifest.old_receipt.matches_old(&receipt)
+            && (active_hash.is_none() || active_hash.as_deref() == Some(manifest.new_hash.as_str()))
+        {
+            return self.restore_recovered_update(
+                backup_root,
+                &backup_skill,
+                &target,
+                &swap_root,
+                &manifest,
+                backup_summary,
+            );
+        }
+        if manifest.new_receipt.matches_new(&receipt)
+            && active_hash.as_deref() == Some(manifest.new_hash.as_str())
+        {
+            return self.cleanup_recovered_update(backup_root, &swap_root);
+        }
+        Err(OperationError::update_partial())
+    }
+
+    fn cleanup_recovered_update(
+        &self,
+        backup_root: &Path,
+        swap_root: &Path,
+    ) -> Result<(), OperationError> {
+        if path_exists(swap_root) {
+            fs::remove_dir_all(swap_root).map_err(|_| OperationError::update_partial())?;
+        }
+        fs::remove_dir_all(backup_root).map_err(|_| OperationError::update_partial())
+    }
+
+    fn restore_recovered_update(
+        &self,
+        backup_root: &Path,
+        backup_skill: &Path,
+        target: &Path,
+        swap_root: &Path,
+        manifest: &UpdateRecoveryManifest,
+        backup_summary: TreeSummary,
+    ) -> Result<(), OperationError> {
+        let previous = swap_root.join("previous").join(&manifest.target_name);
+        let previous_available = if path_exists(&previous) {
+            let summary =
+                summarize_tree(&previous).map_err(|_| OperationError::update_partial())?;
+            if summary.content_hash != manifest.old_hash {
+                return Err(OperationError::update_partial());
+            }
+            true
+        } else {
+            false
+        };
+        if !path_exists(swap_root) {
+            fs::create_dir_all(swap_root).map_err(|_| OperationError::update_partial())?;
+        }
+        let displaced = swap_root
+            .join("recovery-active")
+            .join(&manifest.target_name);
+        if path_exists(&displaced) {
+            return Err(OperationError::update_partial());
+        }
+        let displaced_active = if path_exists(target) {
+            fs::create_dir_all(
+                displaced
+                    .parent()
+                    .ok_or_else(OperationError::update_partial)?,
+            )
+            .map_err(|_| OperationError::update_partial())?;
+            fs::rename(target, &displaced).map_err(|_| OperationError::update_partial())?;
+            true
+        } else {
+            false
+        };
+        let restored = if previous_available {
+            fs::rename(&previous, target).is_ok()
+        } else {
+            let source = inspect_source(ImportSourceKind::Directory, backup_skill)
+                .map_err(|_| OperationError::update_partial())?;
+            copy_source_to_staging(&source, target).is_ok()
+        };
+        let valid_restored = restored
+            && summarize_tree(target)
+                .map(|summary| summary.content_hash == manifest.old_hash)
+                .unwrap_or(false)
+            && backup_summary.content_hash == manifest.old_hash;
+        if !valid_restored {
+            if displaced_active {
+                let _ = if path_exists(target) {
+                    fs::remove_dir_all(target)
+                } else {
+                    Ok(())
+                };
+                let _ = fs::rename(&displaced, target);
+            }
+            return Err(OperationError::update_partial());
+        }
+        if displaced_active {
+            fs::remove_dir_all(&displaced).map_err(|_| OperationError::update_partial())?;
+        }
+        self.cleanup_recovered_update(backup_root, swap_root)
+    }
+
+    fn enqueue_update_analysis(&self, skill_id: &str) {
+        let Some(queue) = self.analysis_queue.as_ref() else {
+            return;
+        };
+        match queue.enqueue(skill_id.to_owned(), true) {
+            Ok(result) if result.status == AnalysisJobStatus::NotConfigured => {
+                self.diagnostics.emit(
+                    DiagnosticRecord::new(
+                        DiagnosticLevel::Warning,
+                        DiagnosticDomain::Analysis,
+                        DiagnosticEventCode::AnalysisFailed,
+                        DiagnosticResult::Degraded,
+                    )
+                    .with_error(
+                        DiagnosticErrorCode::AnalysisNotConfigured,
+                        false,
+                        DiagnosticRecoveryCode::CheckSettings,
+                    ),
+                );
+            }
+            Ok(_) => {}
+            Err(_) => {
+                self.diagnostics.emit(
+                    DiagnosticRecord::new(
+                        DiagnosticLevel::Warning,
+                        DiagnosticDomain::Analysis,
+                        DiagnosticEventCode::AnalysisFailed,
+                        DiagnosticResult::Degraded,
+                    )
+                    .with_error(
+                        DiagnosticErrorCode::AnalysisFailed,
+                        true,
+                        DiagnosticRecoveryCode::Retry,
+                    ),
+                );
+            }
         }
     }
 
@@ -586,11 +1067,11 @@ impl OperationsService {
             token.clone(),
             PendingConfirmation {
                 plan: plan.clone(),
-                source: PendingImportSource::Local {
+                action: PendingConfirmationAction::Import(Box::new(PendingImportSource::Local {
                     source_path: selected.source_path,
                     kind: selected.kind,
                     source_hash: source.source_hash,
-                },
+                })),
                 expires_at_ms,
                 consumed: false,
             },
@@ -730,7 +1211,98 @@ impl OperationsService {
             token.clone(),
             PendingConfirmation {
                 plan: plan.clone(),
-                source: pending,
+                action: PendingConfirmationAction::Import(Box::new(pending)),
+                expires_at_ms,
+                consumed: false,
+            },
+        );
+        self.diagnostics.emit(
+            DiagnosticRecord::new(
+                DiagnosticLevel::Info,
+                DiagnosticDomain::Operations,
+                DiagnosticEventCode::OperationPlanned,
+                DiagnosticResult::Succeeded,
+            )
+            .with_counts(Some(plan.impact.file_count as u64), None),
+        );
+        Ok(PlannedImport {
+            plan,
+            confirmation_token: Some(ConfirmationToken {
+                token,
+                expires_at_ms,
+            }),
+        })
+    }
+
+    pub(crate) fn create_update_operation_root(&self) -> Result<(String, PathBuf), OperationError> {
+        let operation_id = random_token().ok_or_else(OperationError::selection_unavailable)?;
+        let root = self
+            .update_staging_root
+            .as_deref()
+            .ok_or_else(OperationError::quarantine_unavailable)?;
+        fs::create_dir_all(root).map_err(|_| OperationError::quarantine_unavailable())?;
+        let metadata =
+            fs::symlink_metadata(root).map_err(|_| OperationError::quarantine_unavailable())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(OperationError::quarantine_unavailable());
+        }
+        let operation_root = root.join(&operation_id);
+        if operation_root.parent() != Some(root) {
+            return Err(OperationError::update_failed());
+        }
+        fs::create_dir(&operation_root).map_err(|_| OperationError::update_failed())?;
+        Ok((operation_id, operation_root))
+    }
+
+    pub(crate) fn plan_update(
+        &self,
+        prepared: PreparedSkillUpdate,
+    ) -> Result<PlannedImport, OperationError> {
+        if prepared.current_hash != prepared.installed_hash {
+            let plan = OperationPlan {
+                id: prepared.operation_id.clone(),
+                operation: ManagementOperation::SkillUpdate,
+                status: OperationPlanStatus::Conflict,
+                impact: OperationImpact {
+                    target_provider_id: "user_global".to_owned(),
+                    skill_name: prepared.target_name.clone(),
+                    file_count: prepared.file_count,
+                    total_size_bytes: prepared.total_size_bytes,
+                    relative_files: prepared.relative_files.clone(),
+                    entry_id: None,
+                    requires_acknowledgement: false,
+                },
+                source: None,
+            };
+            let _ = fs::remove_dir_all(&prepared.operation_root);
+            return Ok(PlannedImport {
+                plan,
+                confirmation_token: None,
+            });
+        }
+        let plan = OperationPlan {
+            id: prepared.operation_id.clone(),
+            operation: ManagementOperation::SkillUpdate,
+            status: OperationPlanStatus::Ready,
+            impact: OperationImpact {
+                target_provider_id: "user_global".to_owned(),
+                skill_name: prepared.target_name.clone(),
+                file_count: prepared.file_count,
+                total_size_bytes: prepared.total_size_bytes,
+                relative_files: prepared.relative_files.clone(),
+                entry_id: None,
+                requires_acknowledgement: false,
+            },
+            // Receipt, hashes, and full commit remain bound only inside the confirmation action.
+            source: None,
+        };
+        let token = random_token().ok_or_else(OperationError::selection_unavailable)?;
+        let expires_at_ms = now_ms().saturating_add(CONFIRMATION_TTL_MS);
+        lock_unpoisoned(&self.confirmations).insert(
+            token.clone(),
+            PendingConfirmation {
+                plan: plan.clone(),
+                action: PendingConfirmationAction::Update(Box::new(prepared)),
                 expires_at_ms,
                 consumed: false,
             },
@@ -766,63 +1338,70 @@ impl OperationsService {
             self.emit_failure(DiagnosticErrorCode::OperationConflict);
             return Err(OperationError::conflict_detected());
         }
-        let mut cleanup_root = match &confirmation.source {
+        let source = match &confirmation.action {
+            PendingConfirmationAction::Import(source) => source.as_ref(),
+            PendingConfirmationAction::Update(_) => {
+                confirmation.action.cleanup();
+                return Err(OperationError::confirmation_token_invalid());
+            }
+        };
+        let mut cleanup_root = match source {
             PendingImportSource::Local { .. } => None,
             PendingImportSource::Remote { operation_root, .. } => Some(operation_root.clone()),
         };
         let execution = (|| {
-            let (staging_home, staged_skill, expected_hash, target_name, provenance) =
-                match &confirmation.source {
-                    PendingImportSource::Local {
-                        source_path,
-                        kind,
-                        source_hash,
-                    } => {
-                        let source = inspect_source(*kind, source_path)?;
-                        if source.source_hash != *source_hash {
-                            return Err(OperationError::source_changed());
-                        }
-                        if source.target_name != confirmation.plan.impact.skill_name
-                            || path_exists(&self.target_root.join(&source.target_name))
-                        {
-                            return Err(OperationError::conflict_detected());
-                        }
-                        let staging_home = self.create_staging_home(&confirmation.plan.id)?;
-                        cleanup_root = Some(staging_home.clone());
-                        let staged_skill = staging_home
-                            .join(".agents")
-                            .join("skills")
-                            .join(&source.target_name);
-                        copy_source_to_staging(&source, &staged_skill)?;
-                        (
-                            staging_home,
-                            staged_skill,
-                            source_hash.clone(),
-                            source.target_name,
-                            None,
-                        )
+            let (staging_home, staged_skill, expected_hash, target_name, provenance) = match source
+            {
+                PendingImportSource::Local {
+                    source_path,
+                    kind,
+                    source_hash,
+                } => {
+                    let source = inspect_source(*kind, source_path)?;
+                    if source.source_hash != *source_hash {
+                        return Err(OperationError::source_changed());
                     }
-                    PendingImportSource::Remote {
-                        operation_root,
+                    if source.target_name != confirmation.plan.impact.skill_name
+                        || path_exists(&self.target_root.join(&source.target_name))
+                    {
+                        return Err(OperationError::conflict_detected());
+                    }
+                    let staging_home = self.create_staging_home(&confirmation.plan.id)?;
+                    cleanup_root = Some(staging_home.clone());
+                    let staged_skill = staging_home
+                        .join(".agents")
+                        .join("skills")
+                        .join(&source.target_name);
+                    copy_source_to_staging(&source, &staged_skill)?;
+                    (
                         staging_home,
                         staged_skill,
-                        source_hash,
-                        provenance,
-                    } => {
-                        self.validate_github_staging(operation_root, staging_home, staged_skill)?;
-                        github::validate_remote_provenance(provenance)?;
-                        if confirmation.plan.source.as_ref() != Some(provenance) {
-                            return Err(OperationError::source_changed());
-                        }
-                        (
-                            staging_home.clone(),
-                            staged_skill.clone(),
-                            source_hash.clone(),
-                            confirmation.plan.impact.skill_name.clone(),
-                            Some(provenance.clone()),
-                        )
+                        source_hash.clone(),
+                        source.target_name,
+                        None,
+                    )
+                }
+                PendingImportSource::Remote {
+                    operation_root,
+                    staging_home,
+                    staged_skill,
+                    source_hash,
+                    provenance,
+                } => {
+                    self.validate_github_staging(operation_root, staging_home, staged_skill)?;
+                    github::validate_remote_provenance(provenance)?;
+                    if confirmation.plan.source.as_ref() != Some(provenance) {
+                        return Err(OperationError::source_changed());
                     }
-                };
+                    (
+                        staging_home.clone(),
+                        staged_skill.clone(),
+                        source_hash.clone(),
+                        confirmation.plan.impact.skill_name.clone(),
+                        Some(provenance.clone()),
+                    )
+                }
+            };
             self.ensure_audit_store()?;
             let staged = inspect_source(ImportSourceKind::Directory, &staged_skill)?;
             if staged.source_hash != expected_hash || staged.target_name != target_name {
@@ -892,6 +1471,333 @@ impl OperationsService {
             Err(error) => self.emit_failure(error_to_diagnostic(error)),
         }
         execution
+    }
+
+    pub(crate) fn execute_update(
+        &self,
+        confirmation_token: &str,
+    ) -> Result<OperationResult, OperationError> {
+        if !self.import_allowed {
+            return Err(OperationError::provider_read_only());
+        }
+        let confirmation = self.consume_confirmation(confirmation_token)?;
+        let update = match &confirmation.action {
+            PendingConfirmationAction::Update(update) => update.as_ref().clone(),
+            PendingConfirmationAction::Import(_) => {
+                confirmation.action.cleanup();
+                return Err(OperationError::confirmation_token_invalid());
+            }
+        };
+        if confirmation.plan.operation != ManagementOperation::SkillUpdate
+            || confirmation.plan.status != OperationPlanStatus::Ready
+        {
+            confirmation.action.cleanup();
+            return Err(OperationError::update_conflict());
+        }
+        let result = self.execute_prepared_update(&confirmation.plan, &update);
+        let _ = fs::remove_dir_all(&update.operation_root);
+        match &result {
+            Ok(value) => {
+                self.diagnostics.emit(
+                    DiagnosticRecord::new(
+                        DiagnosticLevel::Info,
+                        DiagnosticDomain::Operations,
+                        DiagnosticEventCode::OperationExecuted,
+                        DiagnosticResult::Succeeded,
+                    )
+                    .with_entity_ref(&value.skill_id),
+                );
+            }
+            Err(error) => self.emit_failure(error_to_diagnostic(error)),
+        }
+        result
+    }
+
+    fn execute_prepared_update(
+        &self,
+        plan: &OperationPlan,
+        update: &PreparedSkillUpdate,
+    ) -> Result<OperationResult, OperationError> {
+        self.validate_update_staging(update)?;
+        github::validate_remote_provenance(&update.provenance)?;
+        let receipt = self.install_receipt(&update.skill_id)?;
+        if receipt != update.receipt
+            || receipt.managed_by != "codex-o"
+            || receipt.source_type != update.provenance.source_type
+            || receipt.source_url.as_deref() != Some(update.provenance.repository_url.as_str())
+            || receipt.repo_ref.as_deref() != Some(update.provenance.repo_ref.as_str())
+            || receipt.subdirectory.as_deref() != Some(update.provenance.subdirectory.as_str())
+        {
+            return Err(OperationError::update_receipt_changed());
+        }
+        let candidate = self
+            .catalog
+            .quarantine_candidate(&update.skill_id)
+            .map_err(|_| OperationError::update_unavailable())?;
+        if !candidate.can_quarantine
+            || candidate.provider_id != "user_global"
+            || candidate.relative_path != update.target_name
+            || candidate.directory != self.target_root.join(&update.target_name)
+        {
+            return Err(OperationError::provider_read_only());
+        }
+        let current_hash = self
+            .catalog
+            .current_content_hash(&update.skill_id)
+            .map_err(|_| OperationError::update_unavailable())?;
+        if current_hash != update.current_hash
+            || current_hash != update.installed_hash
+            || receipt.installed_hash != update.installed_hash
+        {
+            return Err(OperationError::update_conflict());
+        }
+        let staged_facts = self
+            .catalog
+            .validate_import_staging(update.staging_home.clone(), &update.target_name)
+            .map_err(|_| OperationError::update_failed())?;
+        if staged_facts.content_hash != update.remote_hash {
+            return Err(OperationError::source_changed());
+        }
+        let staged_summary = inspect_source(ImportSourceKind::Directory, &update.staged_skill)?;
+        let current_summary = inspect_source(ImportSourceKind::Directory, &candidate.directory)?;
+        let backup_root = self.create_update_backup_root(&plan.id)?;
+        let backup_skill = backup_root.join(&update.target_name);
+        if let Err(error) = copy_source_to_staging(&current_summary, &backup_skill) {
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(error);
+        }
+        let backup_summary = inspect_source(ImportSourceKind::Directory, &backup_skill)?;
+        if backup_summary.source_hash != current_summary.source_hash {
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(OperationError::update_failed());
+        }
+        let mut recovery_manifest = UpdateRecoveryManifest {
+            version: UPDATE_RECOVERY_MANIFEST_VERSION,
+            operation_id: plan.id.clone(),
+            skill_id: update.skill_id.clone(),
+            target_name: update.target_name.clone(),
+            old_receipt: UpdateRecoveryReceipt::from_old(&update.receipt),
+            old_hash: current_summary.source_hash.clone(),
+            new_receipt: UpdateRecoveryReceipt::from_new(update),
+            new_hash: update.remote_hash.clone(),
+            phase: UpdateRecoveryPhase::Prepared,
+            backup_relative_path: update.target_name.clone(),
+        };
+        if write_update_recovery_manifest(&backup_root, &recovery_manifest).is_err() {
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(OperationError::update_failed());
+        }
+
+        let swap_root = self
+            .target_root
+            .join(format!(".codex-o-update-{}", plan.id));
+        if path_exists(&swap_root) {
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(OperationError::update_failed());
+        }
+        let replacement_skill = swap_root.join("replacement").join(&update.target_name);
+        let previous_skill = swap_root.join("previous").join(&update.target_name);
+        fs::create_dir_all(
+            previous_skill
+                .parent()
+                .ok_or_else(OperationError::update_failed)?,
+        )
+        .map_err(|_| OperationError::update_failed())?;
+        if let Err(error) = copy_source_to_staging(&staged_summary, &replacement_skill) {
+            let _ = fs::remove_dir_all(&swap_root);
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(error);
+        }
+        let replacement_summary = inspect_source(ImportSourceKind::Directory, &replacement_skill)?;
+        if replacement_summary.source_hash != staged_summary.source_hash {
+            let _ = fs::remove_dir_all(&swap_root);
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(OperationError::update_failed());
+        }
+
+        let target = candidate.directory;
+        if fs::rename(&target, &previous_skill).is_err() {
+            let _ = fs::remove_dir_all(&swap_root);
+            let _ = fs::remove_dir_all(&backup_root);
+            return Err(OperationError::update_failed());
+        }
+        recovery_manifest.phase = UpdateRecoveryPhase::OldMoved;
+        if write_update_recovery_manifest(&backup_root, &recovery_manifest).is_err() {
+            return Err(OperationError::update_partial());
+        }
+        if fs::rename(&replacement_skill, &target).is_err() {
+            let restored = fs::rename(&previous_skill, &target).is_ok();
+            let _ = fs::remove_dir_all(&swap_root);
+            if restored {
+                let _ = fs::remove_dir_all(&backup_root);
+                return Err(OperationError::update_failed());
+            }
+            return Err(OperationError::update_partial());
+        }
+        recovery_manifest.phase = UpdateRecoveryPhase::ReplacementInstalled;
+        if write_update_recovery_manifest(&backup_root, &recovery_manifest).is_err() {
+            return Err(OperationError::update_partial());
+        }
+
+        let mut receipt_updated = false;
+        let update_result = (|| {
+            let installed = self
+                .catalog
+                .current_content_hash(&update.skill_id)
+                .map_err(|_| OperationError::update_failed())?;
+            if installed != update.remote_hash {
+                return Err(OperationError::update_failed());
+            }
+            #[cfg(test)]
+            if *lock_unpoisoned(&self.force_update_database_failure) {
+                return Err(OperationError::database_unavailable());
+            }
+            self.persist_update_success(plan, update)?;
+            receipt_updated = true;
+            recovery_manifest.phase = UpdateRecoveryPhase::ReceiptPersisted;
+            write_update_recovery_manifest(&backup_root, &recovery_manifest)
+                .map_err(|_| OperationError::update_failed())?;
+            self.catalog.scan_skills();
+            #[cfg(test)]
+            if *lock_unpoisoned(&self.force_update_catalog_failure) {
+                return Err(OperationError::update_failed());
+            }
+            if self
+                .catalog
+                .managed_skill_id(&update.target_name)
+                .as_deref()
+                != Some(update.skill_id.as_str())
+                || self
+                    .catalog
+                    .current_content_hash(&update.skill_id)
+                    .ok()
+                    .as_deref()
+                    != Some(update.remote_hash.as_str())
+            {
+                return Err(OperationError::update_failed());
+            }
+            Ok(OperationResult {
+                operation_id: plan.id.clone(),
+                status: OperationResultStatus::Succeeded,
+                skill_id: update.skill_id.clone(),
+                installed_hash: update.remote_hash.clone(),
+                entry_id: None,
+            })
+        })();
+
+        match update_result {
+            Ok(result) => {
+                recovery_manifest.phase = UpdateRecoveryPhase::Completed;
+                if write_update_recovery_manifest(&backup_root, &recovery_manifest).is_ok() {
+                    let _ = fs::remove_dir_all(&swap_root);
+                    let _ = fs::remove_dir_all(&backup_root);
+                }
+                self.enqueue_update_analysis(&update.skill_id);
+                Ok(result)
+            }
+            Err(_) => {
+                let files_restored =
+                    self.rollback_update_files(&target, &previous_skill, &backup_skill, &swap_root);
+                let receipt_restored =
+                    !receipt_updated || self.restore_update_receipt(plan, &update.receipt).is_ok();
+                self.catalog.scan_skills();
+                if files_restored && receipt_restored {
+                    let _ = fs::remove_dir_all(&backup_root);
+                    Err(OperationError::update_failed())
+                } else {
+                    let _ = self.mark_update_partial(plan);
+                    Err(OperationError::update_partial())
+                }
+            }
+        }
+    }
+
+    fn validate_update_staging(&self, update: &PreparedSkillUpdate) -> Result<(), OperationError> {
+        let root = self
+            .update_staging_root
+            .as_deref()
+            .ok_or_else(OperationError::update_unavailable)?;
+        for path in [
+            root,
+            update.operation_root.as_path(),
+            update.staging_home.as_path(),
+            update.staged_skill.as_path(),
+        ] {
+            let metadata =
+                fs::symlink_metadata(path).map_err(|_| OperationError::source_changed())?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(OperationError::source_changed());
+            }
+        }
+        let root = fs::canonicalize(root).map_err(|_| OperationError::source_changed())?;
+        let operation = fs::canonicalize(&update.operation_root)
+            .map_err(|_| OperationError::source_changed())?;
+        let home =
+            fs::canonicalize(&update.staging_home).map_err(|_| OperationError::source_changed())?;
+        let skill =
+            fs::canonicalize(&update.staged_skill).map_err(|_| OperationError::source_changed())?;
+        if operation.parent() != Some(root.as_path())
+            || !home.starts_with(&operation)
+            || !skill.starts_with(&home)
+        {
+            return Err(OperationError::source_changed());
+        }
+        Ok(())
+    }
+
+    fn create_update_backup_root(&self, operation_id: &str) -> Result<PathBuf, OperationError> {
+        if !valid_operation_id(operation_id) {
+            return Err(OperationError::update_failed());
+        }
+        let root = self
+            .update_backup_root
+            .as_deref()
+            .ok_or_else(OperationError::update_unavailable)?;
+        fs::create_dir_all(root).map_err(|_| OperationError::update_failed())?;
+        let metadata = fs::symlink_metadata(root).map_err(|_| OperationError::update_failed())?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(OperationError::update_failed());
+        }
+        let backup = root.join(operation_id);
+        if backup.parent() != Some(root) || path_exists(&backup) {
+            return Err(OperationError::update_failed());
+        }
+        fs::create_dir(&backup).map_err(|_| OperationError::update_failed())?;
+        Ok(backup)
+    }
+
+    fn rollback_update_files(
+        &self,
+        target: &Path,
+        previous_skill: &Path,
+        backup_skill: &Path,
+        swap_root: &Path,
+    ) -> bool {
+        #[cfg(test)]
+        if *lock_unpoisoned(&self.force_update_rollback_failure) {
+            return false;
+        }
+        if path_exists(target) && fs::remove_dir_all(target).is_err() {
+            return false;
+        }
+        if fs::rename(previous_skill, target).is_ok() {
+            let _ = fs::remove_dir_all(swap_root);
+            return true;
+        }
+        let Ok(backup) = inspect_source(ImportSourceKind::Directory, backup_skill) else {
+            return false;
+        };
+        let Some(target_name) = target.file_name().and_then(|value| value.to_str()) else {
+            return false;
+        };
+        let recovered = swap_root.join("recovered").join(target_name);
+        if copy_source_to_staging(&backup, &recovered).is_err()
+            || fs::rename(&recovered, target).is_err()
+        {
+            return false;
+        }
+        let _ = fs::remove_dir_all(swap_root);
+        true
     }
 
     fn plan_quarantine(&self, skill_id: &str) -> Result<PlannedImport, OperationError> {
@@ -1292,7 +2198,7 @@ impl OperationsService {
             .ok_or_else(OperationError::confirmation_token_invalid)?;
         if confirmation.expires_at_ms <= now {
             if let Some(expired) = confirmations.remove(confirmation_token) {
-                expired.source.cleanup();
+                expired.action.cleanup();
             }
             return Err(OperationError::confirmation_token_expired());
         }
@@ -1317,7 +2223,7 @@ impl OperationsService {
                 .ok_or_else(OperationError::confirmation_token_invalid)?
         };
         // The token binds the internal staging path; callers never provide a filesystem path.
-        confirmation.source.cleanup();
+        confirmation.action.cleanup();
         Ok(())
     }
 
@@ -1362,6 +2268,46 @@ impl OperationsService {
             })
             .map(|(_, subdirectory)| subdirectory)
             .collect()
+    }
+
+    pub(crate) fn list_install_receipts(
+        &self,
+    ) -> Result<Vec<InstallReceiptRecord>, OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let mut statement = connection
+            .prepare(
+                "SELECT skill_id, source_type, source_url, repo_ref, commit_sha, subdirectory, installed_hash, installed_at, managed_by FROM install_receipts ORDER BY installed_at DESC, skill_id ASC",
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(InstallReceiptRecord {
+                    skill_id: row.get(0)?,
+                    source_type: row.get(1)?,
+                    source_url: row.get(2)?,
+                    repo_ref: row.get(3)?,
+                    commit_sha: row.get(4)?,
+                    subdirectory: row.get(5)?,
+                    installed_hash: row.get(6)?,
+                    installed_at: row.get(7)?,
+                    managed_by: row.get(8)?,
+                })
+            })
+            .map_err(|_| OperationError::database_unavailable())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|_| OperationError::database_unavailable())
+    }
+
+    fn install_receipt(&self, skill_id: &str) -> Result<InstallReceiptRecord, OperationError> {
+        self.list_install_receipts()?
+            .into_iter()
+            .find(|receipt| receipt.skill_id == skill_id)
+            .ok_or_else(OperationError::update_receipt_changed)
     }
 
     fn quarantine_root(&self) -> Result<&Path, OperationError> {
@@ -1885,6 +2831,120 @@ impl OperationsService {
             .map_err(|_| OperationError::import_failed())
     }
 
+    fn persist_update_success(
+        &self,
+        plan: &OperationPlan,
+        update: &PreparedSkillUpdate,
+    ) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let mut connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .map_err(|_| OperationError::database_unavailable())?;
+        let plan_json = serde_json::to_string(plan).map_err(|_| OperationError::update_failed())?;
+        let result_json = serde_json::to_string(&OperationResultStatus::Succeeded)
+            .map_err(|_| OperationError::update_failed())?;
+        let now = now_ms() as i64;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| OperationError::database_unavailable())?;
+        let changed = transaction
+            .execute(
+                "UPDATE install_receipts SET commit_sha = ?1, installed_hash = ?2, installed_at = ?3 WHERE skill_id = ?4 AND source_type = ?5 AND source_url IS ?6 AND repo_ref IS ?7 AND commit_sha IS ?8 AND subdirectory IS ?9 AND installed_hash = ?10 AND installed_at = ?11 AND managed_by = ?12",
+                params![
+                    update.provenance.commit_sha,
+                    update.remote_hash,
+                    now,
+                    update.receipt.skill_id,
+                    update.receipt.source_type,
+                    update.receipt.source_url,
+                    update.receipt.repo_ref,
+                    update.receipt.commit_sha,
+                    update.receipt.subdirectory,
+                    update.receipt.installed_hash,
+                    update.receipt.installed_at,
+                    update.receipt.managed_by,
+                ],
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        if changed != 1 {
+            return Err(OperationError::update_receipt_changed());
+        }
+        transaction
+            .execute(
+                "INSERT INTO management_operations(id, skill_id, operation, status, plan_json, result_json, created_at, completed_at) VALUES(?1, ?2, 'skill_update', 'succeeded', ?3, ?4, ?5, ?5)",
+                params![plan.id, update.skill_id, plan_json, result_json, now],
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        transaction
+            .commit()
+            .map_err(|_| OperationError::database_unavailable())
+    }
+
+    fn restore_update_receipt(
+        &self,
+        plan: &OperationPlan,
+        receipt: &InstallReceiptRecord,
+    ) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let mut connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| OperationError::database_unavailable())?;
+        let changed = transaction
+            .execute(
+                "UPDATE install_receipts SET source_type = ?1, source_url = ?2, repo_ref = ?3, commit_sha = ?4, subdirectory = ?5, installed_hash = ?6, installed_at = ?7, managed_by = ?8 WHERE skill_id = ?9",
+                params![
+                    receipt.source_type,
+                    receipt.source_url,
+                    receipt.repo_ref,
+                    receipt.commit_sha,
+                    receipt.subdirectory,
+                    receipt.installed_hash,
+                    receipt.installed_at,
+                    receipt.managed_by,
+                    receipt.skill_id,
+                ],
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        if changed != 1 {
+            return Err(OperationError::database_unavailable());
+        }
+        transaction
+            .execute(
+                "UPDATE management_operations SET status = 'failed', result_json = ?1, completed_at = ?2 WHERE id = ?3",
+                params!["\"rolled_back\"", now_ms() as i64, plan.id],
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        transaction
+            .commit()
+            .map_err(|_| OperationError::database_unavailable())
+    }
+
+    fn mark_update_partial(&self, plan: &OperationPlan) -> Result<(), OperationError> {
+        let path = self
+            .database_path
+            .as_deref()
+            .ok_or_else(OperationError::database_unavailable)?;
+        let connection =
+            Connection::open(path).map_err(|_| OperationError::database_unavailable())?;
+        connection
+            .execute(
+                "UPDATE management_operations SET status = 'partial', result_json = ?1, completed_at = ?2 WHERE id = ?3",
+                params!["\"partial\"", now_ms() as i64, plan.id],
+            )
+            .map_err(|_| OperationError::database_unavailable())?;
+        Ok(())
+    }
+
     fn emit_failure(&self, error_code: DiagnosticErrorCode) {
         self.diagnostics.emit(
             DiagnosticRecord::new(
@@ -1905,7 +2965,7 @@ impl OperationsService {
     }
 
     #[cfg(test)]
-    fn expire_confirmation(&self, token: &str) {
+    pub(crate) fn expire_confirmation(&self, token: &str) {
         if let Some(confirmation) = lock_unpoisoned(&self.confirmations).get_mut(token) {
             confirmation.expires_at_ms = 0;
         }
@@ -1951,6 +3011,21 @@ impl OperationsService {
     #[cfg(test)]
     fn force_move_failure_after(&self, successful_moves: usize) {
         *lock_unpoisoned(&self.force_move_failure_after) = Some(successful_moves);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_update_database_failure(&self) {
+        *lock_unpoisoned(&self.force_update_database_failure) = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_update_catalog_failure(&self) {
+        *lock_unpoisoned(&self.force_update_catalog_failure) = true;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn force_update_rollback_failure(&self) {
+        *lock_unpoisoned(&self.force_update_rollback_failure) = true;
     }
 }
 
@@ -2096,7 +3171,7 @@ pub fn execute_quarantine_purge(
     operations.execute_managed(&confirmation_token, Some(&acknowledgement))
 }
 
-fn inspect_source(
+pub(crate) fn inspect_source(
     kind: ImportSourceKind,
     selected_path: &Path,
 ) -> Result<ImportSourceSummary, OperationError> {
@@ -2364,7 +3439,7 @@ fn collect_source_files(
     Ok(())
 }
 
-fn copy_source_to_staging(
+pub(crate) fn copy_source_to_staging(
     source: &ImportSourceSummary,
     staged_skill: &Path,
 ) -> Result<(), OperationError> {
@@ -2404,6 +3479,10 @@ fn valid_skill_name(name: &str) -> bool {
 }
 
 fn valid_operation_id(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_content_hash(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
@@ -2463,6 +3542,27 @@ fn validate_import_metadata(
 
 fn path_exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
+}
+
+fn write_update_recovery_manifest(
+    backup_root: &Path,
+    manifest: &UpdateRecoveryManifest,
+) -> Result<(), OperationError> {
+    let manifest_path = backup_root.join(UPDATE_RECOVERY_MANIFEST_FILE);
+    let temporary_path = backup_root.join("manifest.json.tmp");
+    if fs::symlink_metadata(&manifest_path).is_ok()
+        && fs::symlink_metadata(&manifest_path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(true)
+    {
+        return Err(OperationError::update_failed());
+    }
+    if fs::symlink_metadata(&temporary_path).is_ok() {
+        return Err(OperationError::update_failed());
+    }
+    let bytes = serde_json::to_vec(manifest).map_err(|_| OperationError::update_failed())?;
+    fs::write(&temporary_path, bytes).map_err(|_| OperationError::update_failed())?;
+    fs::rename(&temporary_path, &manifest_path).map_err(|_| OperationError::update_failed())
 }
 
 fn random_token() -> Option<String> {

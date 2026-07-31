@@ -6,6 +6,7 @@ import { PageState } from "./components/PageState";
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { InstallPage } from "./features/install/InstallPage";
 import { MarketPage } from "./features/market/MarketPage";
+import { UpdatesPage } from "./features/updates/UpdatesPage";
 import { SkillDetailPage } from "./features/skills/SkillDetailPage";
 import { SkillsPage } from "./features/skills/SkillsPage";
 import "./App.css";
@@ -23,9 +24,10 @@ function App() {
   const skillDetailRoute = routeManifest.find((route) => route.id === "SkillDetail");
   const installRoute = routeManifest.find((route) => route.id === "Install");
   const marketRoute = routeManifest.find((route) => route.id === "Market");
+  const updatesRoute = routeManifest.find((route) => route.id === "Updates");
   const settingsRoute = routeManifest.find((route) => route.id === "Settings");
 
-  if (!skillsRoute || !skillDetailRoute || !installRoute || !marketRoute || !settingsRoute) {
+  if (!skillsRoute || !skillDetailRoute || !installRoute || !marketRoute || !updatesRoute || !settingsRoute) {
     return null;
   }
 
@@ -49,6 +51,10 @@ function App() {
         path="/market"
         element={<RoutePage route={marketRoute}><MarketPage /></RoutePage>}
       />
+      <Route
+        path="/updates"
+        element={<RoutePage route={updatesRoute}><UpdatesPage /></RoutePage>}
+      />
       {routeManifest
         .filter(
           (route) =>
@@ -56,6 +62,7 @@ function App() {
             route.id !== "SkillDetail" &&
             route.id !== "Install" &&
             route.id !== "Market" &&
+            route.id !== "Updates" &&
             route.id !== "Settings",
         )
         .map((route) => (
