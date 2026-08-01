@@ -13,7 +13,7 @@ use tokio::sync::Semaphore;
 
 use crate::observability::{
     DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel, DiagnosticRecord,
-    DiagnosticRecoveryCode, DiagnosticResult, DiagnosticService,
+    DiagnosticRecoveryCode, DiagnosticResult,
 };
 
 use super::{AnalysisResult, AnalysisRunStatus, AnalysisService, AnalysisServiceError};
@@ -61,15 +61,13 @@ impl AnalysisProgressSink for NoopAnalysisProgressSink {
 #[derive(Clone)]
 pub struct TauriAnalysisProgressSink {
     app: AppHandle,
-    diagnostics: Arc<DiagnosticService>,
     last_statuses: Arc<Mutex<HashMap<String, AnalysisJobStatus>>>,
 }
 
 impl TauriAnalysisProgressSink {
-    pub fn new(app: AppHandle, diagnostics: Arc<DiagnosticService>) -> Self {
+    pub fn new(app: AppHandle) -> Self {
         Self {
             app,
-            diagnostics,
             last_statuses: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -100,7 +98,7 @@ impl AnalysisProgressSink for TauriAnalysisProgressSink {
         };
         for job in changed {
             if let Some(record) = analysis_job_record(&job) {
-                self.diagnostics.emit(record);
+                crate::diagnostics::emit(record);
             }
         }
     }

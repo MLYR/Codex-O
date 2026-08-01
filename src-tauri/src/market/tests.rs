@@ -15,10 +15,7 @@ use rusqlite::Connection;
 use serde_json::json;
 use tempfile::TempDir;
 
-use crate::{
-    catalog::SkillCatalog, db, observability::DiagnosticService, operations::OperationsService,
-    providers::ProviderRoots,
-};
+use crate::{catalog::SkillCatalog, db, operations::OperationsService, providers::ProviderRoots};
 
 use super::*;
 
@@ -436,7 +433,6 @@ impl ServiceFixture {
             Some(database_path.clone()),
             Some(temporary.path().join("app-local")),
             SkillCatalog::with_index_path(roots, database_path.clone()),
-            DiagnosticService::new(None, None),
         ));
         Self {
             temporary,
@@ -591,7 +587,6 @@ fn same_name_local_skill_is_not_marked_as_market_installed() {
         Some(database_path),
         Some(temporary.path().join("app-local")),
         catalog,
-        DiagnosticService::new(None, None),
     ));
     let cache_path = temporary.path().join("market-cache.json");
     write_cache_atomic(&cache_path, &valid_snapshot()).unwrap();

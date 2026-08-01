@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   settingsApi,
   type AiConfigView,
-  type DiagnosticPage,
+  type LogSnapshot,
   type EnvironmentHealth,
 } from "./api";
 import { SettingsPage } from "./SettingsPage";
@@ -21,11 +21,10 @@ vi.mock("./api", () => ({
     listAdditionalRoots: vi.fn(),
     selectAdditionalRoot: vi.fn(),
     removeAdditionalRoot: vi.fn(),
-    getDeveloperSettings: vi.fn(),
-    setDeveloperMode: vi.fn(),
-    listDiagnostics: vi.fn(),
-    exportDiagnostics: vi.fn(),
-    clearDiagnostics: vi.fn(),
+    readLogSnapshot: vi.fn(),
+    clearLogLogical: vi.fn(),
+    setLogPhysicalCleanupOnStart: vi.fn(),
+    exportDiagnosticBundle: vi.fn(),
   },
 }));
 
@@ -57,32 +56,41 @@ const health: EnvironmentHealth = {
   ],
 };
 
-const diagnosticPage: DiagnosticPage = {
-  total: 2,
-  store_status: "available",
-  dropped_count: 0,
+const diagnosticPage: LogSnapshot = {
+  stats: { total: 2, errors: 1, warnings: 0, ai_calls: 0 },
+  storage_status: "available",
+  invalid_line_count: 0,
+  filters: { modules: ["skill_scan", "app"], categories: ["system", "diagnostic", "ai", "skill_mcp"] },
+  coverage: { historical_comparison_available: false },
   records: [
     {
-      id: "evt-0000000000000001-0000000000000001",
+      schema_version: 1,
+      event_id: "evt-0000000000000001-0000000000000001",
       occurred_at: 1_780_000_000_000,
       level: "error",
+      category: "skill_mcp",
       domain: "skill_scan",
       event_code: "skill_scan_failed",
       result: "failed",
+      module: "skill_scan",
       duration_ms: 14,
       error_code: "scan_failed",
       retryable: true,
       recovery_code: "rescan",
-      entity_ref: "0123456789abcdef0123",
+      redaction_version: 1,
     },
     {
-      id: "evt-0000000000000002-0000000000000002",
+      schema_version: 1,
+      event_id: "evt-0000000000000002-0000000000000002",
       occurred_at: 1_780_000_001_000,
       level: "info",
+      category: "system",
       domain: "app",
       event_code: "app_started",
       result: "succeeded",
+      module: "app",
       retryable: false,
+      redaction_version: 1,
     },
   ],
 };
@@ -117,28 +125,12 @@ beforeEach(() => {
     { id: "abc123", display_name: "team-skills", read_only: true },
   ]);
   vi.mocked(settingsApi.removeAdditionalRoot).mockResolvedValue([]);
-  vi.mocked(settingsApi.getDeveloperSettings).mockResolvedValue({
-    developer_mode_enabled: false,
-    store_status: "available",
-    memory_capacity: 500,
-    file_limit: 5,
-    total_bytes_limit: 10 * 1024 * 1024,
-  });
-  vi.mocked(settingsApi.setDeveloperMode).mockResolvedValue({
-    developer_mode_enabled: true,
-    store_status: "available",
-    memory_capacity: 500,
-    file_limit: 5,
-    total_bytes_limit: 10 * 1024 * 1024,
-  });
-  vi.mocked(settingsApi.listDiagnostics).mockResolvedValue(diagnosticPage);
-  vi.mocked(settingsApi.exportDiagnostics).mockResolvedValue({
+  vi.mocked(settingsApi.readLogSnapshot).mockResolvedValue(diagnosticPage);
+  vi.mocked(settingsApi.clearLogLogical).mockResolvedValue("evt-clear");
+  vi.mocked(settingsApi.setLogPhysicalCleanupOnStart).mockResolvedValue(undefined);
+  vi.mocked(settingsApi.exportDiagnosticBundle).mockResolvedValue({
     record_count: 2,
     file_name: "codex-o-diagnostics.jsonl",
-  });
-  vi.mocked(settingsApi.clearDiagnostics).mockResolvedValue({
-    memory_records_cleared: 2,
-    files_cleared: 1,
   });
 });
 
@@ -261,106 +253,75 @@ describe("SettingsPage", () => {
     expect(screen.queryByText("threads")).toBeNull();
   });
 
-  it("keeps the diagnostics view hidden while developer mode is disabled", async () => {
+  it("keeps log center tabs visible without a developer mode gate", async () => {
     render(<SettingsPage />);
 
-    const developerMode = await screen.findByRole("switch", { name: "开发者模式" });
-    expect((developerMode as HTMLInputElement).checked).toBe(false);
-    expect(screen.queryByRole("tab", { name: "诊断与日志" })).toBeNull();
-    expect(settingsApi.listDiagnostics).not.toHaveBeenCalled();
+    expect(await screen.findByRole("tab", { name: "诊断事件" })).not.toBeNull();
+    expect(screen.getByRole("tab", { name: "系统日志" })).not.toBeNull();
+    expect(settingsApi.readLogSnapshot).not.toHaveBeenCalled();
   });
 
-  it("persists developer mode through Rust before revealing diagnostics", async () => {
+  it("reads structured logs only after opening a log center tab", async () => {
     render(<SettingsPage />);
-    const developerMode = await screen.findByRole("switch", { name: "开发者模式" });
+    fireEvent.click(await screen.findByRole("tab", { name: "诊断事件" }));
 
-    fireEvent.click(developerMode);
-
-    await waitFor(() => {
-      expect(settingsApi.setDeveloperMode).toHaveBeenCalledWith(true);
-    });
-    expect(await screen.findByRole("tab", { name: "诊断与日志" })).not.toBeNull();
+    await waitFor(() => expect(settingsApi.readLogSnapshot).toHaveBeenCalledWith({ limit: 200 }));
   });
 
   it("loads structured diagnostics and shows the selected event detail", async () => {
-    vi.mocked(settingsApi.getDeveloperSettings).mockResolvedValue({
-      developer_mode_enabled: true,
-      store_status: "available",
-      memory_capacity: 500,
-      file_limit: 5,
-      total_bytes_limit: 10 * 1024 * 1024,
-    });
     render(<SettingsPage />);
-    fireEvent.click(await screen.findByRole("tab", { name: "诊断与日志" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "诊断事件" }));
 
     expect((await screen.findAllByText("Skill 扫描失败")).length).toBe(2);
-    expect(screen.getAllByText("scan_failed").length).toBe(2);
-    expect(screen.getByText("0123456789abcdef0123")).not.toBeNull();
+    expect(screen.getAllByText("scan_failed").length).toBe(1);
+    // 列表和详情都会展示事件 ID；两处同时存在是日志中心的预期结构。
+    expect(screen.getAllByText("evt-0000000000000001-0000000000000001").length).toBe(2);
     expect(screen.queryByText("/Users/example")).toBeNull();
   });
 
   it("applies enumerated diagnostic filters through the backend query", async () => {
-    vi.mocked(settingsApi.getDeveloperSettings).mockResolvedValue({
-      developer_mode_enabled: true,
-      store_status: "available",
-      memory_capacity: 500,
-      file_limit: 5,
-      total_bytes_limit: 10 * 1024 * 1024,
-    });
     render(<SettingsPage />);
-    fireEvent.click(await screen.findByRole("tab", { name: "诊断与日志" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "诊断事件" }));
     await screen.findAllByText("Skill 扫描失败");
 
     fireEvent.change(screen.getByLabelText("诊断级别"), { target: { value: "error" } });
 
     await waitFor(() => {
-      expect(settingsApi.listDiagnostics).toHaveBeenLastCalledWith(
+      expect(settingsApi.readLogSnapshot).toHaveBeenLastCalledWith(
         expect.objectContaining({ level: "error", limit: 200 }),
       );
     });
   });
 
-  it("shows the memory-only degradation and an empty state", async () => {
-    vi.mocked(settingsApi.getDeveloperSettings).mockResolvedValue({
-      developer_mode_enabled: true,
-      store_status: "memory_only",
-      memory_capacity: 500,
-      file_limit: 5,
-      total_bytes_limit: 10 * 1024 * 1024,
-    });
-    vi.mocked(settingsApi.listDiagnostics).mockResolvedValue({
+  it("shows file-log unavailability and an empty state", async () => {
+    vi.mocked(settingsApi.readLogSnapshot).mockResolvedValue({
       records: [],
-      total: 0,
-      store_status: "memory_only",
-      dropped_count: 0,
+      stats: { total: 0, errors: 0, warnings: 0, ai_calls: 0 },
+      filters: { modules: [], categories: [] },
+      coverage: { historical_comparison_available: false },
+      storage_status: "unavailable",
+      invalid_line_count: 0,
     });
     render(<SettingsPage />);
-    fireEvent.click(await screen.findByRole("tab", { name: "诊断与日志" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "诊断事件" }));
 
     expect(await screen.findByText("没有匹配的诊断记录")).not.toBeNull();
-    expect(screen.getByText(/日志目录不可用/)).not.toBeNull();
+    expect(screen.getByText(/文件日志不可用/)).not.toBeNull();
   });
 
   it("exports and requires a second click before clearing diagnostics", async () => {
-    vi.mocked(settingsApi.getDeveloperSettings).mockResolvedValue({
-      developer_mode_enabled: true,
-      store_status: "available",
-      memory_capacity: 500,
-      file_limit: 5,
-      total_bytes_limit: 10 * 1024 * 1024,
-    });
     render(<SettingsPage />);
-    fireEvent.click(await screen.findByRole("tab", { name: "诊断与日志" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "诊断事件" }));
     await screen.findAllByText("Skill 扫描失败");
 
     fireEvent.click(screen.getByRole("button", { name: "导出" }));
-    await waitFor(() => expect(settingsApi.exportDiagnostics).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settingsApi.exportDiagnosticBundle).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: "清空" }));
-    expect(settingsApi.clearDiagnostics).not.toHaveBeenCalled();
+    expect(settingsApi.clearLogLogical).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "确认清空" }));
 
-    await waitFor(() => expect(settingsApi.clearDiagnostics).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(settingsApi.clearLogLogical).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("没有匹配的诊断记录")).not.toBeNull();
   });
 });

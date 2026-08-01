@@ -25,9 +25,10 @@ use crate::{
         AnalysisSource, HttpAiProvider, ProviderResponse, RedactionCounts, SkillPassport,
         UnavailableAnalysisCache,
     },
-    app_error::AppErrorCode,
     catalog::{SkillCatalog, SkillListQuery, SkillScope, SkillValidity},
-    observability::{EventName, LocalLogEvent, OperationName, OperationResult},
+    observability::{
+        DiagnosticDomain, DiagnosticEventCode, DiagnosticLevel, DiagnosticResult, SafeLogEvent,
+    },
     providers::{AdditionalRoot, ProviderKind, ProviderRoots},
     secrets::{ProviderSecretId, SecretStore, SecretStoreError, SecretValue},
 };
@@ -588,18 +589,16 @@ fn evaluate_safety() -> SafetyMetrics {
     let source_marker = "GATE-SOURCE-MARKER";
     let dto_leak_count = count_markers(&scan_json, &[temp_marker.as_ref(), source_marker]);
 
-    let log = LocalLogEvent {
-        event: EventName::CompatibilityProbe,
-        operation: OperationName::Inspect,
-        result: OperationResult::Failed,
-        duration_ms: 1,
-        error_code: Some(AppErrorCode::DatabaseNotFound),
-        retryable: true,
-        provider_kind: Some(ProviderKind::LegacyUser),
-        item_count: 1,
-        byte_count: 1,
-    }
-    .render();
+    let log = serde_json::to_string(
+        &SafeLogEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticDomain::Database,
+            DiagnosticEventCode::DatabaseInitialized,
+            DiagnosticResult::Degraded,
+        )
+        .with_duration(1),
+    )
+    .unwrap();
     let log_leak_count = count_markers(&log, &[temp_marker.as_ref(), source_marker]);
 
     let progress = AnalysisProgress {

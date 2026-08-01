@@ -2059,6 +2059,31 @@ input {
   font-size: 12px;
 }
 
+/* 日志中心的指标和详情页签保持轻量，避免为单一事件引入额外组件依赖。 */
+.diagnostics-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.diagnostics-metrics span {
+  min-width: 92px;
+  padding: 9px 11px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+}
+
+.diagnostics-metrics b {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-primary);
+  font-size: 16px;
+}
+
 .diagnostics-filters {
   display: grid;
   grid-template-columns: 24px repeat(4, minmax(0, 1fr));
@@ -2237,6 +2262,46 @@ input {
 
 .diagnostics-detail-heading .icon-only-button {
   margin-left: auto;
+}
+
+.diagnostic-detail-tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.diagnostic-detail-tabs button {
+  padding: 7px 8px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.diagnostic-detail-tabs button[aria-selected="true"] {
+  color: var(--color-primary-text);
+  border-bottom-color: var(--color-primary);
+  font-weight: 600;
+}
+
+.diagnostics-json {
+  max-height: 420px;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  overflow: auto;
+  color: var(--color-text-primary);
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .diagnostics-detail dl {

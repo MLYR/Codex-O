@@ -3,6 +3,7 @@ pub mod app_error;
 pub mod catalog;
 pub mod codex_fixture;
 pub mod db;
+pub mod diagnostics;
 pub mod market;
 pub mod observability;
 pub mod operations;
@@ -31,14 +32,17 @@ pub fn run() {
             let repository_directory =
                 std::env::current_dir().unwrap_or_else(|_| home_directory.clone());
             let app_local_data_directory = app.path().app_local_data_dir().ok();
-            // Diagnostics starts before database, Catalog, analysis, and settings so startup failures remain traceable.
-            let diagnostics = observability::DiagnosticService::new(
-                app.path().app_log_dir().ok(),
-                app_local_data_directory
-                    .as_deref()
-                    .map(observability::settings_path),
-            );
-            diagnostics.emit(observability::DiagnosticRecord::new(
+            // Clear only the app-owned files before the plugin opens its active handle.
+            if let (Some(app_local), Some(log_directory)) = (
+                app_local_data_directory.as_deref(),
+                app.path().app_log_dir().ok().as_deref(),
+            ) {
+                let _ =
+                    diagnostics::viewer::physical_cleanup_if_requested(app_local, log_directory);
+            }
+            app.handle()
+                .plugin(diagnostics::build_plugin(app.path().app_log_dir().ok()))?;
+            diagnostics::emit(observability::DiagnosticRecord::new(
                 observability::DiagnosticLevel::Info,
                 observability::DiagnosticDomain::App,
                 observability::DiagnosticEventCode::AppStarted,
@@ -52,7 +56,7 @@ pub fn run() {
                 .as_ref()
                 .map(|path| db::initialize(path.clone()))
                 .unwrap_or_else(db::storage_unavailable);
-            diagnostics.emit(database_diagnostic_record(
+            diagnostics::emit(database_diagnostic_record(
                 database.status(),
                 database_started.elapsed().as_millis() as u64,
             ));
@@ -89,50 +93,41 @@ pub fn run() {
                 Arc::clone(&analysis_service),
                 Arc::new(analysis::TauriAnalysisProgressSink::new(
                     app.handle().clone(),
-                    Arc::clone(&diagnostics),
                 )),
             );
             let settings_service = app_local_data_directory
                 .as_ref()
                 .map(|directory| {
-                    Arc::new(
-                        settings::SettingsService::new(
-                            settings::config_path(directory),
-                            settings::system_secret_store(),
-                            Arc::clone(&analysis_service),
-                            catalog.clone(),
-                            database.status(),
-                            Some(home_directory.join(".codex/state_5.sqlite")),
-                        )
-                        .with_diagnostics(Arc::clone(&diagnostics)),
-                    )
+                    Arc::new(settings::SettingsService::new(
+                        settings::config_path(directory),
+                        settings::system_secret_store(),
+                        Arc::clone(&analysis_service),
+                        catalog.clone(),
+                        database.status(),
+                        Some(home_directory.join(".codex/state_5.sqlite")),
+                    ))
                 })
                 .unwrap_or_else(|| {
                     // App-local path resolution failure keeps settings read-only instead of escaping to cwd.
-                    Arc::new(
-                        settings::SettingsService::without_storage(
-                            settings::system_secret_store(),
-                            Arc::clone(&analysis_service),
-                            catalog.clone(),
-                            database.status(),
-                            None,
-                        )
-                        .with_diagnostics(Arc::clone(&diagnostics)),
-                    )
+                    Arc::new(settings::SettingsService::without_storage(
+                        settings::system_secret_store(),
+                        Arc::clone(&analysis_service),
+                        catalog.clone(),
+                        database.status(),
+                        None,
+                    ))
                 });
-            diagnostics.emit(observability::DiagnosticRecord::new(
+            diagnostics::emit(observability::DiagnosticRecord::new(
                 observability::DiagnosticLevel::Info,
                 observability::DiagnosticDomain::Settings,
                 observability::DiagnosticEventCode::SettingsLoaded,
                 observability::DiagnosticResult::Succeeded,
             ));
-            app.manage(Arc::clone(&diagnostics));
             let operations_service = Arc::new(
                 operations::OperationsService::new(
                     database_path.clone(),
                     app_local_data_directory.clone(),
                     catalog.clone(),
-                    Arc::clone(&diagnostics),
                 )
                 .with_analysis_queue(analysis_queue.clone()),
             );
@@ -175,11 +170,10 @@ pub fn run() {
             settings::list_additional_roots,
             settings::select_additional_root,
             settings::remove_additional_root,
-            observability::get_developer_settings,
-            observability::set_developer_mode,
-            observability::list_diagnostics,
-            observability::export_diagnostics,
-            observability::clear_diagnostics,
+            diagnostics::commands::read_log_snapshot,
+            diagnostics::commands::clear_log_logical,
+            diagnostics::commands::set_log_physical_cleanup_on_start,
+            diagnostics::commands::export_diagnostic_bundle,
             operations::select_import_source,
             operations::plan_skill_import,
             operations::plan_github_import,

@@ -20,7 +20,7 @@ use tauri::State;
 use crate::{
     observability::{
         DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel,
-        DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult, DiagnosticService,
+        DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult,
     },
     parsing::{
         parse_skill, read_skill_source, ArtifactSnapshot, MarkdownHeading, ParseDiagnostic,
@@ -814,19 +814,16 @@ pub fn list_providers(catalog: State<'_, SkillCatalog>) -> ProviderList {
 }
 
 #[tauri::command]
-pub async fn scan_skills(
-    catalog: State<'_, SkillCatalog>,
-    diagnostics: State<'_, Arc<DiagnosticService>>,
-) -> Result<CatalogScan, CatalogError> {
+pub async fn scan_skills(catalog: State<'_, SkillCatalog>) -> Result<CatalogScan, CatalogError> {
     let started = Instant::now();
-    diagnostics.emit(DiagnosticRecord::new(
+    crate::diagnostics::emit(DiagnosticRecord::new(
         DiagnosticLevel::Info,
         DiagnosticDomain::SkillScan,
         DiagnosticEventCode::SkillScanStarted,
         DiagnosticResult::Started,
     ));
     if let Err(error) = catalog.begin_scan() {
-        diagnostics.emit(
+        crate::diagnostics::emit(
             DiagnosticRecord::new(
                 DiagnosticLevel::Warning,
                 DiagnosticDomain::SkillScan,
@@ -852,7 +849,7 @@ pub async fn scan_skills(
     catalog.finish_scan();
     match &result {
         Ok(scan) => {
-            diagnostics.emit(
+            crate::diagnostics::emit(
                 DiagnosticRecord::new(
                     DiagnosticLevel::Info,
                     DiagnosticDomain::SkillScan,
@@ -864,7 +861,7 @@ pub async fn scan_skills(
             );
         }
         Err(_) => {
-            diagnostics.emit(
+            crate::diagnostics::emit(
                 DiagnosticRecord::new(
                     DiagnosticLevel::Error,
                     DiagnosticDomain::SkillScan,
@@ -884,13 +881,10 @@ pub async fn scan_skills(
 }
 
 #[tauri::command]
-pub fn load_catalog(
-    catalog: State<'_, SkillCatalog>,
-    diagnostics: State<'_, Arc<DiagnosticService>>,
-) -> Option<CatalogScan> {
+pub fn load_catalog(catalog: State<'_, SkillCatalog>) -> Option<CatalogScan> {
     let started = Instant::now();
     let scan = catalog.load_catalog();
-    diagnostics.emit(
+    crate::diagnostics::emit(
         DiagnosticRecord::new(
             if scan.is_some() {
                 DiagnosticLevel::Info

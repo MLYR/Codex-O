@@ -30,7 +30,6 @@ use crate::{
     observability::{
         DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel,
         DiagnosticProviderKind, DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult,
-        DiagnosticService,
     },
     providers::AdditionalRoot,
     secrets::{
@@ -176,7 +175,6 @@ pub struct SettingsService {
     database_status: DatabaseStatus,
     codex_database_path: Option<PathBuf>,
     credential_counter: AtomicU64,
-    diagnostics: Option<Arc<DiagnosticService>>,
 }
 
 impl SettingsService {
@@ -204,7 +202,6 @@ impl SettingsService {
             database_status,
             codex_database_path,
             credential_counter: AtomicU64::new(0),
-            diagnostics: None,
         };
         service.revalidate_loaded_additional_roots();
         service.refresh_analysis_provider();
@@ -229,16 +226,9 @@ impl SettingsService {
             database_status,
             codex_database_path,
             credential_counter: AtomicU64::new(0),
-            diagnostics: None,
         };
         service.refresh_analysis_provider();
         service
-    }
-
-    pub fn with_diagnostics(mut self, diagnostics: Arc<DiagnosticService>) -> Self {
-        self.diagnostics = Some(diagnostics);
-        self.refresh_analysis_provider();
-        self
     }
 
     pub fn get_ai_config(&self) -> AiConfigView {
@@ -492,10 +482,6 @@ impl SettingsService {
         );
         provider_config.timeout = Duration::from_secs(config.timeout_seconds);
         HttpAiProvider::new(provider_config, Arc::clone(&self.secrets))
-            .map(|provider| match &self.diagnostics {
-                Some(diagnostics) => provider.with_diagnostics(Arc::clone(diagnostics)),
-                None => provider,
-            })
             .map(|provider| Arc::new(provider) as Arc<dyn AiProvider>)
             .map_err(|_| invalid_configuration())
     }
@@ -687,13 +673,10 @@ impl SettingsService {
 }
 
 #[tauri::command]
-pub fn get_ai_config(
-    settings: State<'_, Arc<SettingsService>>,
-    diagnostics: State<'_, Arc<DiagnosticService>>,
-) -> AiConfigView {
+pub fn get_ai_config(settings: State<'_, Arc<SettingsService>>) -> AiConfigView {
     let started = Instant::now();
     let view = settings.get_ai_config();
-    diagnostics.emit(
+    crate::diagnostics::emit(
         DiagnosticRecord::new(
             DiagnosticLevel::Info,
             DiagnosticDomain::Settings,
@@ -709,14 +692,13 @@ pub fn get_ai_config(
 #[tauri::command]
 pub fn save_ai_config(
     settings: State<'_, Arc<SettingsService>>,
-    diagnostics: State<'_, Arc<DiagnosticService>>,
     input: AiConfigInput,
 ) -> Result<AiConfigView, SettingsError> {
     let started = Instant::now();
     let result = settings.save_ai_config(input);
     match &result {
         Ok(view) => {
-            diagnostics.emit(
+            crate::diagnostics::emit(
                 DiagnosticRecord::new(
                     DiagnosticLevel::Info,
                     DiagnosticDomain::Settings,
@@ -728,7 +710,7 @@ pub fn save_ai_config(
             );
         }
         Err(error) => {
-            diagnostics.emit(
+            crate::diagnostics::emit(
                 DiagnosticRecord::new(
                     DiagnosticLevel::Error,
                     DiagnosticDomain::Settings,
@@ -750,7 +732,6 @@ pub fn save_ai_config(
 #[tauri::command]
 pub async fn test_ai_connection(
     settings: State<'_, Arc<SettingsService>>,
-    diagnostics: State<'_, Arc<DiagnosticService>>,
 ) -> Result<ConnectionTestResult, SettingsError> {
     let started = Instant::now();
     let result = settings.test_ai_connection().await;
@@ -761,7 +742,7 @@ pub async fn test_ai_connection(
                 ConnectionStatus::Failed => (DiagnosticLevel::Error, DiagnosticResult::Failed),
                 ConnectionStatus::Blocked => (DiagnosticLevel::Warning, DiagnosticResult::Degraded),
             };
-            diagnostics.emit(
+            crate::diagnostics::emit(
                 DiagnosticRecord::new(
                     level,
                     DiagnosticDomain::Settings,
@@ -772,7 +753,7 @@ pub async fn test_ai_connection(
             );
         }
         Err(error) => {
-            diagnostics.emit(
+            crate::diagnostics::emit(
                 DiagnosticRecord::new(
                     DiagnosticLevel::Error,
                     DiagnosticDomain::Settings,
@@ -792,17 +773,14 @@ pub async fn test_ai_connection(
 }
 
 #[tauri::command]
-pub fn get_environment_health(
-    settings: State<'_, Arc<SettingsService>>,
-    diagnostics: State<'_, Arc<DiagnosticService>>,
-) -> EnvironmentHealth {
+pub fn get_environment_health(settings: State<'_, Arc<SettingsService>>) -> EnvironmentHealth {
     let started = Instant::now();
     let health = settings.get_environment_health();
     let degraded = health
         .items
         .iter()
         .any(|item| item.status != HealthStatus::Ready);
-    diagnostics.emit(
+    crate::diagnostics::emit(
         DiagnosticRecord::new(
             if degraded {
                 DiagnosticLevel::Warning

@@ -1,7 +1,6 @@
 import {
   AlertCircle,
   BrainCircuit,
-  Bug,
   ClipboardCopy,
   Database,
   Download,
@@ -26,12 +25,10 @@ import {
   type AiConfigView,
   type AiProviderKind,
   type AiSecretAction,
-  type DeveloperSettingsView,
-  type DiagnosticDomain,
-  type DiagnosticErrorCode,
+  type LogCategory,
   type DiagnosticLevel,
-  type DiagnosticPage,
-  type DiagnosticQuery,
+  type LogQuery,
+  type LogSnapshot,
   type DiagnosticRecord,
   type DiagnosticResult,
   type EnvironmentHealth,
@@ -45,19 +42,19 @@ const providerDefaults: Record<AiProviderKind, string> = {
 };
 
 export function SettingsPage() {
-  const [activeView, setActiveView] = useState<"general" | "diagnostics">("general");
+  const [activeView, setActiveView] = useState<"overview" | "diagnostics" | "system" | "ai" | "skill_mcp" | "export">("overview");
   const [preferences, setPreferences] = useState<ScanPreferences>();
   const [aiConfig, setAiConfig] = useState<AiConfigView>();
   const [draft, setDraft] = useState<AiConfigView>();
   const [secretAction, setSecretAction] = useState<AiSecretAction>("keep");
   const [roots, setRoots] = useState<AdditionalRootView[]>([]);
   const [health, setHealth] = useState<EnvironmentHealth>();
-  const [developerSettings, setDeveloperSettings] = useState<DeveloperSettingsView>();
-  const [diagnostics, setDiagnostics] = useState<DiagnosticPage>();
-  const [diagnosticQuery, setDiagnosticQuery] = useState<DiagnosticQuery>({ limit: 200 });
+  const [diagnostics, setDiagnostics] = useState<LogSnapshot>();
+  const [diagnosticQuery, setDiagnosticQuery] = useState<LogQuery>({ limit: 200 });
   const [selectedEventId, setSelectedEventId] = useState<string>();
   const [diagnosticLoading, setDiagnosticLoading] = useState(false);
   const [clearArmed, setClearArmed] = useState(false);
+  const [physicalCleanupArmed, setPhysicalCleanupArmed] = useState(false);
   const [error, setError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [busyAction, setBusyAction] = useState<string>();
@@ -70,8 +67,7 @@ export function SettingsPage() {
       settingsApi.getAiConfig(),
       settingsApi.listAdditionalRoots(),
       settingsApi.getEnvironmentHealth(),
-      settingsApi.getDeveloperSettings(),
-    ]).then(([preferencesResult, aiResult, rootsResult, healthResult, developerResult]) => {
+    ]).then(([preferencesResult, aiResult, rootsResult, healthResult]) => {
       if (!active) {
         return;
       }
@@ -89,11 +85,8 @@ export function SettingsPage() {
       if (healthResult.status === "fulfilled") {
         setHealth(healthResult.value);
       }
-      if (developerResult.status === "fulfilled") {
-        setDeveloperSettings(developerResult.value);
-      }
       if (
-        [preferencesResult, aiResult, rootsResult, healthResult, developerResult].some(
+        [preferencesResult, aiResult, rootsResult, healthResult].some(
           (result) => result.status === "rejected",
         )
       ) {
@@ -106,23 +99,23 @@ export function SettingsPage() {
   }, []);
 
   useEffect(() => {
-    if (activeView !== "diagnostics" || !developerSettings?.developer_mode_enabled) {
+    if (activeView === "overview") {
       return;
     }
     let active = true;
     setDiagnosticLoading(true);
     setError(undefined);
     void settingsApi
-      .listDiagnostics(diagnosticQuery)
+      .readLogSnapshot(diagnosticQuery)
       .then((page) => {
         if (!active) {
           return;
         }
         setDiagnostics(page);
         setSelectedEventId((current) =>
-          current && page.records.some((record) => record.id === current)
+          current && page.records.some((record) => record.event_id === current)
             ? current
-            : page.records[0]?.id,
+            : page.records[0]?.event_id,
         );
       })
       .catch((failure: unknown) => {
@@ -138,7 +131,7 @@ export function SettingsPage() {
     return () => {
       active = false;
     };
-  }, [activeView, developerSettings?.developer_mode_enabled, diagnosticQuery]);
+  }, [activeView, diagnosticQuery]);
 
   const runAction = async (action: string, operation: () => Promise<void>) => {
     setBusyAction(action);
@@ -228,26 +221,13 @@ export function SettingsPage() {
     });
   };
 
-  const updateDeveloperMode = (enabled: boolean) => {
-    void runAction("developer-mode", async () => {
-      const saved = await settingsApi.setDeveloperMode(enabled);
-      setDeveloperSettings(saved);
-      if (!enabled) {
-        setActiveView("general");
-        setDiagnostics(undefined);
-        setSelectedEventId(undefined);
-      }
-      setMessage(enabled ? "开发者模式已开启。" : "开发者模式已关闭。");
-    });
-  };
-
   const refreshDiagnostics = () => {
     setDiagnosticQuery((current) => ({ ...current }));
   };
 
   const exportDiagnostics = () => {
     void runAction("export-diagnostics", async () => {
-      const result = await settingsApi.exportDiagnostics(diagnosticQuery);
+      const result = await settingsApi.exportDiagnosticBundle(diagnosticQuery);
       setMessage(`已导出 ${result.record_count} 条脱敏诊断记录。`);
     });
   };
@@ -258,18 +238,23 @@ export function SettingsPage() {
       return;
     }
     void runAction("clear-diagnostics", async () => {
-      const result = await settingsApi.clearDiagnostics();
+      await settingsApi.clearLogLogical();
       setClearArmed(false);
-      setDiagnostics({
-        records: [],
-        total: 0,
-        store_status: developerSettings?.store_status ?? "memory_only",
-        dropped_count: 0,
-      });
+      setDiagnostics(undefined);
       setSelectedEventId(undefined);
-      setMessage(
-        `已清空 ${result.memory_records_cleared} 条内存记录和 ${result.files_cleared} 个日志文件。`,
-      );
+      setMessage("已逻辑清空日志；磁盘文件将在读取时保留。可另行登记下次启动物理清理。");
+    });
+  };
+
+  const requestPhysicalCleanup = () => {
+    if (!physicalCleanupArmed) {
+      setPhysicalCleanupArmed(true);
+      return;
+    }
+    void runAction("physical-log-cleanup", async () => {
+      await settingsApi.setLogPhysicalCleanupOnStart(true);
+      setPhysicalCleanupArmed(false);
+      setMessage("已登记下次启动时物理清理应用日志文件。");
     });
   };
 
@@ -286,25 +271,32 @@ export function SettingsPage() {
         <button
           type="button"
           role="tab"
-          aria-selected={activeView === "general"}
-          className={activeView === "general" ? "is-active" : ""}
-          onClick={() => setActiveView("general")}
+          aria-selected={activeView === "overview"}
+          className={activeView === "overview" ? "is-active" : ""}
+          onClick={() => setActiveView("overview")}
         >
           <Settings2 size={15} aria-hidden="true" />
-          常规设置
+          概览
         </button>
-        {developerSettings?.developer_mode_enabled ? (
+        {[
+          ["diagnostics", "诊断事件"],
+          ["system", "系统日志"],
+          ["ai", "AI 解析日志"],
+          ["skill_mcp", "Skill / MCP"],
+          ["export", "导出诊断包"],
+        ].map(([value, label]) => (
           <button
+            key={value}
             type="button"
             role="tab"
-            aria-selected={activeView === "diagnostics"}
-            className={activeView === "diagnostics" ? "is-active" : ""}
-            onClick={() => setActiveView("diagnostics")}
+            aria-selected={activeView === value}
+            className={activeView === value ? "is-active" : ""}
+            onClick={() => setActiveView(value as typeof activeView)}
           >
-            <ScrollText size={15} aria-hidden="true" />
-            诊断与日志
+            {value === "diagnostics" ? <ScrollText size={15} aria-hidden="true" /> : null}
+            {label}
           </button>
-        ) : null}
+        ))}
       </div>
 
       <div className="settings-feedback" aria-live="polite">
@@ -321,28 +313,17 @@ export function SettingsPage() {
         ) : null}
       </div>
 
-      {activeView === "general" ? (
+      {activeView === "overview" ? (
         <>
-          <section className="settings-section" aria-labelledby="developer-mode-title">
-            <div className="settings-row settings-row-compact">
-              <span className="settings-icon" aria-hidden="true">
-                <Bug size={18} />
-              </span>
-              <div className="settings-copy">
-                <strong id="developer-mode-title">开发者模式</strong>
-                <span>开启后可查看、导出和清空始终脱敏的本机诊断记录</span>
+          <section className="settings-section" aria-labelledby="log-center-overview-title">
+            <div className="settings-section-heading">
+              <ScrollText size={18} aria-hidden="true" />
+              <div>
+                <h2 id="log-center-overview-title">日志中心</h2>
+                <p>安全事件始终采集；读取、导出和清理由 Rust 命令控制。</p>
               </div>
-              {developerSettings ? (
-                <Toggle
-                  label="开发者模式"
-                  checked={developerSettings.developer_mode_enabled}
-                  disabled={busyAction === "developer-mode"}
-                  onChange={updateDeveloperMode}
-                />
-              ) : (
-                <LoaderCircle className="is-spinning" size={18} aria-label="正在读取开发者设置" />
-              )}
             </div>
+            <p className="settings-empty">选择上方页签查看诊断事件、系统健康、AI 解析和 Skill / MCP 活动。</p>
           </section>
 
       <section className="settings-section" aria-labelledby="ai-settings-title">
@@ -624,22 +605,26 @@ export function SettingsPage() {
         )}
       </section>
         </>
-      ) : developerSettings?.developer_mode_enabled ? (
+      ) : (
         <DiagnosticsView
           page={diagnostics}
           query={diagnosticQuery}
+          activeTab={activeView}
           selectedEventId={selectedEventId}
           loading={diagnosticLoading}
           busyAction={busyAction}
           clearArmed={clearArmed}
+          physicalCleanupArmed={physicalCleanupArmed}
           onQueryChange={setDiagnosticQuery}
           onSelect={setSelectedEventId}
           onRefresh={refreshDiagnostics}
           onExport={exportDiagnostics}
           onClear={clearDiagnostics}
           onCancelClear={() => setClearArmed(false)}
+          onPhysicalCleanup={requestPhysicalCleanup}
+          onCancelPhysicalCleanup={() => setPhysicalCleanupArmed(false)}
         />
-      ) : null}
+      )}
     </section>
   );
 }
@@ -647,39 +632,54 @@ export function SettingsPage() {
 function DiagnosticsView({
   page,
   query,
+  activeTab,
   selectedEventId,
   loading,
   busyAction,
   clearArmed,
+  physicalCleanupArmed,
   onQueryChange,
   onSelect,
   onRefresh,
   onExport,
   onClear,
   onCancelClear,
+  onPhysicalCleanup,
+  onCancelPhysicalCleanup,
 }: {
-  page?: DiagnosticPage;
-  query: DiagnosticQuery;
+  page?: LogSnapshot;
+  query: LogQuery;
+  activeTab: "diagnostics" | "system" | "ai" | "skill_mcp" | "export";
   selectedEventId?: string;
   loading: boolean;
   busyAction?: string;
   clearArmed: boolean;
-  onQueryChange: (query: DiagnosticQuery) => void;
+  physicalCleanupArmed: boolean;
+  onQueryChange: (query: LogQuery) => void;
   onSelect: (eventId: string) => void;
   onRefresh: () => void;
   onExport: () => void;
   onClear: () => void;
   onCancelClear: () => void;
+  onPhysicalCleanup: () => void;
+  onCancelPhysicalCleanup: () => void;
 }) {
-  const selected = page?.records.find((record) => record.id === selectedEventId);
+  const selected = page?.records.find((record) => record.event_id === selectedEventId);
+  const tabTitle = {
+    diagnostics: "诊断事件",
+    system: "系统日志",
+    ai: "AI 解析日志",
+    skill_mcp: "Skill / MCP",
+    export: "导出诊断包",
+  }[activeTab];
 
   return (
     <section className="settings-section diagnostics-section" aria-labelledby="diagnostics-title">
       <div className="settings-section-heading diagnostics-heading">
         <ScrollText size={18} aria-hidden="true" />
         <div>
-          <h2 id="diagnostics-title">诊断与日志</h2>
-          <p>仅展示 Rust allowlist 生成的结构化安全字段</p>
+          <h2 id="diagnostics-title">{tabTitle}</h2>
+          <p>仅展示经过 Rust 校验的 SafeLogEvent 结构化安全字段</p>
         </div>
         <div className="diagnostics-actions">
           <button
@@ -715,13 +715,37 @@ function DiagnosticsView({
               取消
             </button>
           ) : null}
+          <button
+            className={physicalCleanupArmed ? "danger-button icon-button-label" : "secondary-button icon-button-label"}
+            type="button"
+            disabled={busyAction === "physical-log-cleanup"}
+            onClick={onPhysicalCleanup}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+            {physicalCleanupArmed ? "确认下次启动清理" : "下次启动物理清理"}
+          </button>
+          {physicalCleanupArmed ? (
+            <button className="secondary-button" type="button" onClick={onCancelPhysicalCleanup}>
+              取消
+            </button>
+          ) : null}
         </div>
       </div>
 
-      {page?.store_status === "memory_only" ? (
+      {page?.storage_status === "unavailable" ? (
         <div className="diagnostics-store-warning">
           <FileWarning size={16} aria-hidden="true" />
-          <span>日志目录不可用，当前仅保留本进程最近 500 条内存诊断。</span>
+          <span>文件日志不可用；应用仍可运行，当前不会使用内存兜底。</span>
+        </div>
+      ) : null}
+
+      {page ? (
+        <div className="diagnostics-metrics" aria-label="日志指标">
+          <span>总事件 <b>{page.stats.total}</b></span>
+          <span>错误 <b>{page.stats.errors}</b></span>
+          <span>警告 <b>{page.stats.warnings}</b></span>
+          <span>AI 调用 <b>{page.stats.ai_calls}</b></span>
+          {!page.coverage.historical_comparison_available ? <span>历史数据不足</span> : null}
         </div>
       ) : null}
 
@@ -746,26 +770,33 @@ function DiagnosticsView({
           </select>
         </label>
         <label>
-          <span>模块</span>
+          <span>分类</span>
           <select
-            aria-label="诊断模块"
-            value={query.domain ?? ""}
+            aria-label="日志分类"
+            value={query.category ?? ""}
             onChange={(event) =>
               onQueryChange({
                 ...query,
-                domain: (event.target.value || undefined) as DiagnosticDomain | undefined,
+                category: (event.target.value || undefined) as LogCategory | undefined,
               })
             }
           >
             <option value="">全部</option>
-            <option value="app">应用</option>
-            <option value="database">数据库</option>
-            <option value="catalog">Catalog</option>
-            <option value="skill_scan">Skill 扫描</option>
-            <option value="analysis">AI 分析</option>
-            <option value="settings">设置</option>
-            <option value="environment">环境健康</option>
-            <option value="diagnostics">诊断服务</option>
+            <option value="system">系统</option>
+            <option value="diagnostic">诊断</option>
+            <option value="ai">AI</option>
+            <option value="skill_mcp">Skill / MCP</option>
+          </select>
+        </label>
+        <label>
+          <span>模块</span>
+          <select
+            aria-label="日志模块"
+            value={query.module ?? ""}
+            onChange={(event) => onQueryChange({ ...query, module: event.target.value || undefined })}
+          >
+            <option value="">全部</option>
+            {page?.filters.modules.map((module) => <option key={module} value={module}>{module}</option>)}
           </select>
         </label>
         <label>
@@ -788,33 +819,20 @@ function DiagnosticsView({
           </select>
         </label>
         <label>
-          <span>错误码</span>
-          <select
-            aria-label="诊断错误码"
-            value={query.errorCode ?? ""}
-            onChange={(event) =>
-              onQueryChange({
-                ...query,
-                errorCode: (event.target.value || undefined) as DiagnosticErrorCode | undefined,
-              })
-            }
-          >
-            <option value="">全部</option>
-            <option value="database_unavailable">database_unavailable</option>
-            <option value="database_schema_incompatible">
-              database_schema_incompatible
-            </option>
-            <option value="scan_failed">scan_failed</option>
-            <option value="scan_in_progress">scan_in_progress</option>
-            <option value="analysis_not_configured">analysis_not_configured</option>
-            <option value="analysis_failed">analysis_failed</option>
-            <option value="settings_unavailable">settings_unavailable</option>
-            <option value="invalid_configuration">invalid_configuration</option>
-            <option value="privacy_remote_blocked">privacy_remote_blocked</option>
-            <option value="ai_not_configured">ai_not_configured</option>
-            <option value="secret_unavailable">secret_unavailable</option>
-            <option value="path_not_allowed">path_not_allowed</option>
-          </select>
+          <span>事件 ID</span>
+          <input
+            aria-label="事件 ID"
+            value={query.eventId ?? ""}
+            onChange={(event) => onQueryChange({ ...query, eventId: event.target.value || undefined })}
+          />
+        </label>
+        <label>
+          <span>trace / request</span>
+          <input
+            aria-label="trace 或 request 引用"
+            value={query.traceId ?? query.requestRef ?? ""}
+            onChange={(event) => onQueryChange({ ...query, traceId: event.target.value || undefined })}
+          />
         </label>
       </div>
 
@@ -827,24 +845,24 @@ function DiagnosticsView({
         <div className="diagnostics-layout">
           <div className="diagnostics-list-pane">
             <div className="diagnostics-summary">
-              <span>{page.total} 条匹配记录</span>
-              {page.dropped_count > 0 ? <b>{page.dropped_count} 条待聚合写入</b> : null}
+              <span>{page.records.length} 条当前筛选记录</span>
+              {page.invalid_line_count > 0 ? <b>{page.invalid_line_count} 条损坏行已忽略</b> : null}
             </div>
             <ol className="diagnostics-list">
               {page.records.map((record) => (
-                <li key={record.id}>
+                <li key={record.event_id}>
                   <button
                     type="button"
-                    className={record.id === selectedEventId ? "is-selected" : ""}
-                    aria-pressed={record.id === selectedEventId}
-                    onClick={() => onSelect(record.id)}
+                    className={record.event_id === selectedEventId ? "is-selected" : ""}
+                    aria-pressed={record.event_id === selectedEventId}
+                    onClick={() => onSelect(record.event_id)}
                   >
                     <span className="diagnostic-level" data-level={record.level}>
                       {record.level}
                     </span>
                     <strong>{eventLabel(record.event_code)}</strong>
                     <time>{formatDiagnosticTime(record.occurred_at)}</time>
-                    <code>{record.id}</code>
+                    <code>{record.event_id}</code>
                   </button>
                 </li>
               ))}
@@ -864,6 +882,7 @@ function DiagnosticsView({
 }
 
 function DiagnosticDetail({ record }: { record: DiagnosticRecord }) {
+  const [activeTab, setActiveTab] = useState<"summary" | "json" | "metadata">("summary");
   const copyRecord = () => {
     const serialized = JSON.stringify(record, null, 2);
     if (navigator.clipboard?.writeText) {
@@ -875,7 +894,7 @@ function DiagnosticDetail({ record }: { record: DiagnosticRecord }) {
       <div className="diagnostics-detail-heading">
         <div>
           <strong>{eventLabel(record.event_code)}</strong>
-          <code>{record.id}</code>
+          <code>{record.event_id}</code>
         </div>
         <button
           className="icon-only-button"
@@ -887,21 +906,41 @@ function DiagnosticDetail({ record }: { record: DiagnosticRecord }) {
           <ClipboardCopy size={15} aria-hidden="true" />
         </button>
       </div>
-      <dl>
+      <div className="diagnostic-detail-tabs" role="tablist" aria-label="事件详情页签">
+        {(["summary", "json", "metadata"] as const).map((tab) => (
+          <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} onClick={() => setActiveTab(tab)}>
+            {tab === "summary" ? "摘要" : tab === "json" ? "详情 JSON" : "响应元数据（脱敏）"}
+          </button>
+        ))}
+      </div>
+      {activeTab === "summary" ? <dl>
         <DiagnosticField label="时间" value={formatDiagnosticTime(record.occurred_at)} />
         <DiagnosticField label="级别" value={record.level} />
-        <DiagnosticField label="模块" value={domainLabel(record.domain)} />
+        <DiagnosticField label="分类" value={record.category} />
+        <DiagnosticField label="模块" value={record.module} />
+        <DiagnosticField label="域" value={domainLabel(record.domain)} />
         <DiagnosticField label="结果" value={resultLabel(record.result)} />
         <DiagnosticField label="耗时" value={record.duration_ms === undefined ? "未记录" : `${record.duration_ms} ms`} />
         <DiagnosticField label="错误码" value={record.error_code ?? "无"} />
         <DiagnosticField label="可重试" value={record.retryable ? "是" : "否"} />
         <DiagnosticField label="恢复建议" value={recoveryLabel(record.recovery_code)} />
-        <DiagnosticField label="Provider" value={record.provider_kind ?? "未关联"} />
-        <DiagnosticField label="项目数" value={record.item_count?.toString() ?? "未记录"} />
-        <DiagnosticField label="字节数" value={record.byte_count?.toString() ?? "未记录"} />
-        <DiagnosticField label="丢弃聚合" value={record.dropped_count?.toString() ?? "0"} />
-        <DiagnosticField label="实体引用" value={record.entity_ref ?? "未关联"} />
-      </dl>
+        <DiagnosticField label="Provider" value={record.provider ?? "未关联"} />
+        <DiagnosticField label="模型" value={record.model ?? "未关联"} />
+        <DiagnosticField label="条目数" value={record.item_count?.toString() ?? "未记录"} />
+        <DiagnosticField label="HTTP 状态" value={record.http_status?.toString() ?? "未记录"} />
+        <DiagnosticField label="trace_id" value={record.trace_id ?? "未关联"} />
+        <DiagnosticField label="request_ref" value={record.request_ref ?? "未关联"} />
+      </dl> : activeTab === "json" ? (
+        <pre className="diagnostics-json">{JSON.stringify(record, null, 2)}</pre>
+      ) : (
+        <dl>
+          <DiagnosticField label="状态码" value={record.http_status?.toString() ?? "未记录"} />
+          <DiagnosticField label="模型" value={record.model ?? "未关联"} />
+          <DiagnosticField label="Provider" value={record.provider ?? "未关联"} />
+          <DiagnosticField label="耗时" value={record.duration_ms === undefined ? "未记录" : `${record.duration_ms} ms`} />
+          <DiagnosticField label="条目数" value={record.item_count?.toString() ?? "未记录"} />
+        </dl>
+      )}
     </aside>
   );
 }
@@ -1020,6 +1059,9 @@ function eventLabel(eventCode: string) {
     diagnostic_access_denied: "诊断访问被拒绝",
     diagnostics_exported: "诊断导出",
     diagnostics_cleared: "诊断清空",
+    log_event_cleared: "日志逻辑清空",
+    frontend_log_rejected: "前端日志被拦截",
+    physical_log_cleanup_requested: "下次启动物理清理已登记",
   };
   return labels[eventCode] ?? eventCode;
 }
@@ -1054,7 +1096,6 @@ function recoveryLabel(recoveryCode?: string) {
     check_settings: "检查相关设置",
     rescan: "重新扫描",
     restart_application: "重启应用",
-    continue_with_memory_diagnostics: "继续使用内存诊断",
   };
   return recoveryCode ? (labels[recoveryCode] ?? recoveryCode) : "无";
 }

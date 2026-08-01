@@ -3,9 +3,7 @@ use std::{fs, path::PathBuf};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-use crate::{
-    catalog::SkillCatalog, db, observability::DiagnosticService, providers::ProviderRoots,
-};
+use crate::{catalog::SkillCatalog, db, providers::ProviderRoots};
 
 use super::{
     copy_source_to_staging, inspect_source, valid_relative_path, write_update_recovery_manifest,
@@ -39,7 +37,6 @@ impl Fixture {
             Some(database_path.clone()),
             Some(temporary.path().join("app-local")),
             catalog,
-            DiagnosticService::new(None, None),
         );
         Self {
             temporary,
@@ -159,7 +156,6 @@ fn recovery_service(fixture: &Fixture) -> OperationsService {
         Some(fixture.database_path.clone()),
         Some(fixture.temporary.path().join("app-local")),
         fixture.service.catalog.clone(),
-        DiagnosticService::new(None, None),
     )
 }
 
@@ -761,7 +757,6 @@ fn unavailable_database_rejects_before_target_write() {
         None,
         Some(fixture.temporary.path().join("no-db-app-local")),
         catalog,
-        DiagnosticService::new(None, None),
     );
     let source = fixture.write_valid_skill("no-database");
     let selection = service
@@ -1009,7 +1004,6 @@ fn quarantine_entries_survive_service_restart() {
         Some(fixture.database_path.clone()),
         Some(fixture.temporary.path().join("app-local")),
         SkillCatalog::with_index_path(roots, fixture.database_path.clone()),
-        DiagnosticService::new(None, None),
     );
 
     let entries = restarted.list_quarantine_entries().unwrap();
@@ -1507,7 +1501,6 @@ fn purging_row_converges_after_database_finalization_failure_and_restart() {
         Some(fixture.database_path.clone()),
         Some(fixture.temporary.path().join("app-local")),
         SkillCatalog::with_index_path(roots, fixture.database_path.clone()),
-        DiagnosticService::new(None, None),
     );
 
     assert!(restarted.list_quarantine_entries().unwrap().is_empty());

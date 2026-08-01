@@ -56,6 +56,7 @@ export interface EnvironmentHealth {
 }
 
 export type DiagnosticLevel = "info" | "warning" | "error";
+export type LogCategory = "system" | "diagnostic" | "ai" | "skill_mcp";
 export type DiagnosticDomain =
   | "app"
   | "database"
@@ -67,10 +68,6 @@ export type DiagnosticDomain =
   | "diagnostics";
 export type DiagnosticResult = "started" | "succeeded" | "failed" | "degraded";
 export type DiagnosticErrorCode =
-  | "developer_mode_required"
-  | "log_store_unavailable"
-  | "log_export_failed"
-  | "selection_unavailable"
   | "database_unavailable"
   | "database_schema_incompatible"
   | "scan_failed"
@@ -84,56 +81,70 @@ export type DiagnosticErrorCode =
   | "secret_unavailable"
   | "path_not_allowed";
 
-export interface DeveloperSettingsView {
-  developer_mode_enabled: boolean;
-  store_status: "available" | "memory_only";
-  memory_capacity: number;
-  file_limit: number;
-  total_bytes_limit: number;
-}
-
 export interface DiagnosticRecord {
-  id: string;
+  schema_version: number;
+  event_id: string;
   occurred_at: number;
   level: DiagnosticLevel;
+  category: LogCategory;
   domain: DiagnosticDomain;
   event_code: string;
   result: DiagnosticResult;
+  module: string;
+  submodule?: string;
   duration_ms?: number;
+  trace_id?: string;
+  request_ref?: string;
+  provider?: string;
+  model?: string;
+  http_status?: number;
+  item_count?: number;
   error_code?: DiagnosticErrorCode;
   retryable: boolean;
   recovery_code?: string;
-  provider_kind?: string;
-  item_count?: number;
-  byte_count?: number;
-  dropped_count?: number;
-  entity_ref?: string;
+  redaction_version: number;
 }
 
-export interface DiagnosticQuery {
+export interface LogQuery {
   level?: DiagnosticLevel;
-  domain?: DiagnosticDomain;
+  category?: LogCategory;
+  module?: string;
   result?: DiagnosticResult;
-  errorCode?: DiagnosticErrorCode;
+  fromOccurredAt?: number;
+  toOccurredAt?: number;
+  traceId?: string;
   eventId?: string;
+  requestRef?: string;
+  cursor?: string;
   limit?: number;
 }
 
-export interface DiagnosticPage {
-  records: DiagnosticRecord[];
+export interface LogStats {
   total: number;
-  store_status: "available" | "memory_only";
-  dropped_count: number;
+  errors: number;
+  warnings: number;
+  ai_calls: number;
 }
 
-export interface DiagnosticExportResult {
+export interface LogCoverage {
+  oldest_occurred_at?: number;
+  newest_occurred_at?: number;
+  historical_comparison_available: boolean;
+}
+
+export interface LogSnapshot {
+  records: DiagnosticRecord[];
+  stats: LogStats;
+  filters: { modules: string[]; categories: LogCategory[] };
+  coverage: LogCoverage;
+  cursor?: string;
+  storage_status: "available" | "unavailable";
+  invalid_line_count: number;
+}
+
+export interface DiagnosticBundleResult {
   record_count: number;
   file_name: string;
-}
-
-export interface DiagnosticClearResult {
-  memory_records_cleared: number;
-  files_cleared: number;
 }
 
 export const settingsApi = {
@@ -153,14 +164,11 @@ export const settingsApi = {
   selectAdditionalRoot: () => invoke<AdditionalRootView[]>("select_additional_root"),
   removeAdditionalRoot: (rootId: string) =>
     invoke<AdditionalRootView[]>("remove_additional_root", { rootId }),
-  getDeveloperSettings: () =>
-    invoke<DeveloperSettingsView>("get_developer_settings"),
-  setDeveloperMode: (enabled: boolean) =>
-    invoke<DeveloperSettingsView>("set_developer_mode", { enabled }),
-  listDiagnostics: (query: DiagnosticQuery) =>
-    invoke<DiagnosticPage>("list_diagnostics", { query }),
-  exportDiagnostics: (query: DiagnosticQuery) =>
-    invoke<DiagnosticExportResult>("export_diagnostics", { query }),
-  clearDiagnostics: () =>
-    invoke<DiagnosticClearResult>("clear_diagnostics"),
+  readLogSnapshot: (query: LogQuery) =>
+    invoke<LogSnapshot>("read_log_snapshot", { query }),
+  clearLogLogical: () => invoke<string>("clear_log_logical"),
+  setLogPhysicalCleanupOnStart: (requested: boolean) =>
+    invoke<void>("set_log_physical_cleanup_on_start", { requested }),
+  exportDiagnosticBundle: (query: LogQuery) =>
+    invoke<DiagnosticBundleResult>("export_diagnostic_bundle", { query }),
 };

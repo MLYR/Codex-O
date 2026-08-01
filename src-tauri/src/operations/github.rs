@@ -917,9 +917,7 @@ mod tests {
     use tempfile::TempDir;
     use zip::{write::SimpleFileOptions, ZipWriter};
 
-    use crate::{
-        catalog::SkillCatalog, db, observability::DiagnosticService, providers::ProviderRoots,
-    };
+    use crate::{catalog::SkillCatalog, db, providers::ProviderRoots};
 
     use super::*;
 
@@ -1068,7 +1066,6 @@ mod tests {
                 Some(database_path.clone()),
                 Some(temporary.path().join("app-local")),
                 SkillCatalog::with_index_path(roots, database_path.clone()),
-                DiagnosticService::new(None, None),
             );
             Self {
                 temporary,
@@ -1606,7 +1603,6 @@ mod tests {
             Some(database_path.clone()),
             Some(app_local),
             SkillCatalog::with_index_path(roots, database_path),
-            DiagnosticService::new(None, None),
         );
 
         assert!(!abandoned.exists());

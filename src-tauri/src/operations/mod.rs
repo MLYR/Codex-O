@@ -22,7 +22,7 @@ use crate::{
     catalog::{QuarantineCandidate, SkillCatalog},
     observability::{
         DiagnosticDomain, DiagnosticErrorCode, DiagnosticEventCode, DiagnosticLevel,
-        DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult, DiagnosticService,
+        DiagnosticRecord, DiagnosticRecoveryCode, DiagnosticResult,
     },
 };
 
@@ -623,7 +623,6 @@ pub struct OperationsService {
     update_backup_root: Option<PathBuf>,
     target_root: PathBuf,
     catalog: SkillCatalog,
-    diagnostics: Arc<DiagnosticService>,
     analysis_queue: Option<AnalysisQueue>,
     selections: Mutex<HashMap<String, SelectedSource>>,
     confirmations: Mutex<HashMap<String, PendingConfirmation>>,
@@ -656,7 +655,6 @@ impl OperationsService {
         database_path: Option<PathBuf>,
         app_local_data_root: Option<PathBuf>,
         catalog: SkillCatalog,
-        diagnostics: Arc<DiagnosticService>,
     ) -> Self {
         let target_root = catalog.managed_user_root();
         let github_staging_root = app_local_data_root
@@ -683,7 +681,6 @@ impl OperationsService {
                 .map(|root| root.join("update-backups")),
             target_root,
             catalog,
-            diagnostics,
             analysis_queue: None,
             selections: Mutex::new(HashMap::new()),
             confirmations: Mutex::new(HashMap::new()),
@@ -720,7 +717,7 @@ impl OperationsService {
     }
 
     fn emit_update_recovery_partial(&self) {
-        self.diagnostics.emit(
+        crate::diagnostics::emit(
             DiagnosticRecord::new(
                 DiagnosticLevel::Warning,
                 DiagnosticDomain::Operations,
@@ -957,7 +954,7 @@ impl OperationsService {
         };
         match queue.enqueue(skill_id.to_owned(), true) {
             Ok(result) if result.status == AnalysisJobStatus::NotConfigured => {
-                self.diagnostics.emit(
+                crate::diagnostics::emit(
                     DiagnosticRecord::new(
                         DiagnosticLevel::Warning,
                         DiagnosticDomain::Analysis,
@@ -973,7 +970,7 @@ impl OperationsService {
             }
             Ok(_) => {}
             Err(_) => {
-                self.diagnostics.emit(
+                crate::diagnostics::emit(
                     DiagnosticRecord::new(
                         DiagnosticLevel::Warning,
                         DiagnosticDomain::Analysis,
@@ -1076,7 +1073,7 @@ impl OperationsService {
                 consumed: false,
             },
         );
-        self.diagnostics.emit(
+        crate::diagnostics::emit(
             DiagnosticRecord::new(
                 DiagnosticLevel::Info,
                 DiagnosticDomain::Operations,
@@ -1216,7 +1213,7 @@ impl OperationsService {
                 consumed: false,
             },
         );
-        self.diagnostics.emit(
+        crate::diagnostics::emit(
             DiagnosticRecord::new(
                 DiagnosticLevel::Info,
                 DiagnosticDomain::Operations,
@@ -1307,7 +1304,7 @@ impl OperationsService {
                 consumed: false,
             },
         );
-        self.diagnostics.emit(
+        crate::diagnostics::emit(
             DiagnosticRecord::new(
                 DiagnosticLevel::Info,
                 DiagnosticDomain::Operations,
@@ -1458,7 +1455,7 @@ impl OperationsService {
         }
         match &execution {
             Ok(result) => {
-                self.diagnostics.emit(
+                crate::diagnostics::emit(
                     DiagnosticRecord::new(
                         DiagnosticLevel::Info,
                         DiagnosticDomain::Operations,
@@ -1498,7 +1495,7 @@ impl OperationsService {
         let _ = fs::remove_dir_all(&update.operation_root);
         match &result {
             Ok(value) => {
-                self.diagnostics.emit(
+                crate::diagnostics::emit(
                     DiagnosticRecord::new(
                         DiagnosticLevel::Info,
                         DiagnosticDomain::Operations,
@@ -2946,7 +2943,7 @@ impl OperationsService {
     }
 
     fn emit_failure(&self, error_code: DiagnosticErrorCode) {
-        self.diagnostics.emit(
+        crate::diagnostics::emit(
             DiagnosticRecord::new(
                 DiagnosticLevel::Warning,
                 DiagnosticDomain::Operations,

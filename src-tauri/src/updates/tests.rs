@@ -22,7 +22,6 @@ use crate::{
     catalog::SkillCatalog,
     db,
     market::MarketEndpoints,
-    observability::DiagnosticService,
     operations::{github::GithubEndpoints, OperationsService},
     providers::ProviderRoots,
 };
@@ -68,7 +67,6 @@ impl Fixture {
                 Some(database_path.clone()),
                 Some(app_local.clone()),
                 catalog.clone(),
-                DiagnosticService::new(None, None),
             )
             .with_analysis_queue(analysis_queue.clone()),
         );
